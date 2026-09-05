@@ -9,6 +9,8 @@ from pathlib import Path
 from veyra.providers.models import SearchResult, StreamSource
 from veyra.providers.registry import ProviderRegistry
 
+from .cs3 import CS3Provider, CS3RuntimeAdapter, CS3RuntimeUnavailable
+
 
 _RUNNER = r'''
 import importlib.util, json, sys
@@ -68,8 +70,12 @@ class IsolatedProvider:
         return [StreamSource(**row) for row in self._call("streams", {"item": asdict(item)})]
 
 
-def load_enabled_providers(root: Path | None = None) -> ProviderRegistry:
-    """Build a registry from installed and enabled native extensions."""
+def load_enabled_providers(root: Path | None = None, cs3_runtime: CS3RuntimeAdapter | None = None) -> ProviderRegistry:
+    """Build a registry from installed/enabled VEYRA and CS3 providers.
+
+    CS3 packages are passed to the isolated runtime boundary and are never
+    imported or executed by the Python GUI process.
+    """
     root = root or (Path.home() / "AppData" / "Local" / "VEYRA" / "extensions")
     state_path = root.parent / "installed_extensions.json"
     try:
@@ -78,11 +84,21 @@ def load_enabled_providers(root: Path | None = None) -> ProviderRegistry:
         rows = []
     enabled = {str(row["id"]): row for row in rows if isinstance(row, dict) and row.get("id") and row.get("enabled", True)}
     registry = ProviderRegistry()
+    cs3_runtime = cs3_runtime or CS3RuntimeAdapter()
     for extension_id, state in enabled.items():
-        if str(state.get("package_type", "veyra")).lower() == "cs3":
-            # CS3 is stored for the future compatibility runtime, never imported as Python.
-            continue
         package = root / extension_id
+        package_type = str(state.get("package_type", "veyra")).lower()
+        if package_type == "cs3":
+            try:
+                candidates = sorted(package.glob("*.cs3"))
+                if not candidates:
+                    continue
+                provider = cs3_runtime.load(candidates[0])
+                if isinstance(provider, CS3Provider):
+                    registry.register(provider)
+            except (OSError, ValueError, TypeError, CS3RuntimeUnavailable):
+                continue
+            continue
         manifest_path = package / "manifest.json"
         if not manifest_path.is_file():
             continue
