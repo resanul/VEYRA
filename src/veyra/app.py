@@ -7,7 +7,7 @@ from .history import PlaybackHistory
 from .models import MediaItem
 
 
-VEYRA_VERSION = "0.1.0"
+VEYRA_VERSION = "0.2.0"
 
 
 def _fmt_ms(value: int) -> str:
@@ -45,7 +45,7 @@ def main() -> int:
 
     title = QLabel(f"VEYRA {VEYRA_VERSION} · Universal Media Player")
     title.setStyleSheet("font-size: 22px; font-weight: 700; padding: 10px;")
-    status = QLabel("Open a media file or stream URL to begin.")
+    status = QLabel("Select an extension to load its catalog, or open a media file.")
     time_label = QLabel("00:00 / 00:00")
     seek = QSlider(Qt.Orientation.Horizontal)
     seek.setRange(0, 0)
@@ -109,7 +109,8 @@ def main() -> int:
 
     def show_extensions() -> None:
         from .extensions.ui import RepositoryDialog
-        RepositoryDialog(window).exec()
+        dialog = RepositoryDialog(window)
+        dialog.exec()
 
     open_btn = QPushButton("Open")
     play_btn = QPushButton("Play / Pause")
