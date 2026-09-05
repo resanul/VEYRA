@@ -128,10 +128,6 @@ class RepositoryDialog(QDialog):
         except (KeyError, OSError, ValueError) as exc:
             QMessageBox.warning(self, "Load failed", str(exc))
             return
-        if plugin.package_type.lower() == "cs3":
-            self.status.setText(f"Installed {plugin.name}. CS3 compatibility runtime is required to load its catalog.")
-            QMessageBox.information(self, "CS3 compatibility", "This CloudStream extension is installed and verified, but VEYRA cannot execute Android DEX plugins yet. It will not be loaded as native Python code.")
-            return
         self.status.setText(f"Loading {plugin.name}…")
         if callable(self.on_loaded):
             self.on_loaded(plugin)
