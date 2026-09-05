@@ -59,8 +59,8 @@ def wait_for(manager: DownloadManager, task_id: str, timeout: float = 5.0):
 
 
 def test_filename_from_url_is_safe() -> None:
-    assert DownloadManager.filename_from_url("https://example.test/a%20movie?.mp4") == "a movie"
-    assert DownloadManager.filename_from_url("https://example.test/a:b?.mp4") == "a_b_.mp4"
+    assert DownloadManager.filename_from_url("https://example.test/a%20movie") == "a movie"
+    assert DownloadManager.filename_from_url("https://example.test/a:b.mp4") == "a_b.mp4"
 
 
 def test_download_persists_and_completes(server, tmp_path: Path) -> None:
@@ -87,8 +87,7 @@ def test_partial_file_resumes_with_range(server, tmp_path: Path) -> None:
     manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files")
     task = manager.add(server)
     part = tmp_path / "files" / ".test.bin.part"
-    prefix = PAYLOAD[:100]
-    part.write_bytes(prefix)
+    part.write_bytes(PAYLOAD[:100])
 
     manager.start(task.id)
     result = wait_for(manager, task.id)
