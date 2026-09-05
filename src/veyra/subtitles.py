@@ -21,7 +21,6 @@ class SubtitleCue:
             raise ValueError("invalid subtitle cue timing")
 
 
-_TIMESTAMP_RE = re.compile(r"^(?:(\d+):)?(\d{1,2}):([0-5]\d)[,.](\d{3})$")
 _TAG_RE = re.compile(r"<[^>]+>")
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
 
@@ -50,7 +49,7 @@ def parse_timestamp(value: str) -> int:
 def _clean_text(lines: list[str], *, ass: bool = False) -> str:
     text = "\n".join(lines).strip()
     if ass:
-        text = _ASS_TAG_RE.sub("", text).replace(r"\\N", "\n").replace(r"\\n", "\n")
+        text = _ASS_TAG_RE.sub("", text).replace(r"\N", "\n").replace(r"\n", "\n")
     text = html.unescape(_TAG_RE.sub("", text))
     text = re.sub(r"[ \t]+", " ", text)
     return text.strip()
@@ -79,8 +78,6 @@ def parse_srt(text: str) -> tuple[SubtitleCue, ...]:
 
 
 def parse_vtt(text: str) -> tuple[SubtitleCue, ...]:
-    # WebVTT cue blocks use the same timestamp syntax as SRT; ignore headers,
-    # NOTE/STYLE/REGION blocks and cue settings after the end timestamp.
     text = text.replace("\ufeff", "")
     blocks = re.split(r"\r?\n\s*\r?\n", text.strip())
     cues: list[SubtitleCue] = []
@@ -139,7 +136,6 @@ def parse_ass_timestamp(value: str) -> int:
     if not match:
         raise ValueError(f"invalid ASS timestamp: {value!r}")
     hours, minutes, seconds, fraction = match.groups()
-    # ASS stores centiseconds; accept three digits as milliseconds as well.
     milliseconds = int(fraction.ljust(3, "0")[:3])
     return (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000 + milliseconds
 
@@ -217,8 +213,6 @@ class SubtitleEngine:
             self._cursor = 0
             return ""
         index = min(self._cursor, len(self.cues) - 1)
-        if index < 0:
-            index = 0
         if self.cues[index].start_ms <= target <= self.cues[index].end_ms:
             return self.cues[index].text
         if target < self.cues[index].start_ms:
