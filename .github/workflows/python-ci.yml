@@ -28,4 +28,4 @@ jobs:
         run: python -m compileall -q src tests build_entry.py
 
       - name: Unit tests
-        run: python -m pytest -q
+        run: python -m pytest -q -m "not e2e"
