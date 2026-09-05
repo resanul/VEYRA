@@ -15,3 +15,10 @@ def test_target_path_and_installed(tmp_path: Path) -> None:
     target = installer.target_path(extension)
     assert target == tmp_path / "demo" / "extension.bin"
     assert not installer.is_installed(extension)
+
+
+def test_cs3_state_is_persisted(tmp_path: Path) -> None:
+    installer = ExtensionInstaller(tmp_path)
+    installer._set_state("cine", "CineStream", "485", True, "cs3")
+    assert installer.enabled() == ["cine"]
+    assert installer.package_type("cine") == "cs3"
