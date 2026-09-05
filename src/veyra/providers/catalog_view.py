@@ -25,6 +25,7 @@ class CatalogView(QWidget):
 
     # Emits the complete source so headers, subtitles and format are preserved.
     play_requested = Signal(object)
+    details_requested = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -106,10 +107,11 @@ class CatalogView(QWidget):
         result = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(result, SearchResult) or self.provider is None:
             return
-        try:
-            streams = list(self.provider.streams(result))
-        except (OSError, RuntimeError, ValueError, TypeError):
-            streams = []
+        # Details first. The details page decides whether this is a movie,
+        # series, or episode-driven title and only requests playback afterward.
+        self.details_requested.emit(result)
+
+    def play_streams(self, result: SearchResult, streams: list[StreamSource]) -> None:
         if not streams:
             self._show_error("No playable stream was returned for this title.")
             return
