@@ -4,13 +4,19 @@ from dataclasses import replace
 
 
 def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_menu, *, settings=None):
-    """Install persistent subtitle sync/styling actions into the player menu."""
+    """Install persistent subtitle controls and advanced player state."""
     from PySide6.QtCore import QSettings
     from PySide6.QtGui import QKeySequence, QShortcut
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
+    from .playback_state import PlaybackState, PlaybackStateStore
     from .subtitles import SubtitleStyle
 
     store = settings or QSettings("VEYRA", "VEYRA")
+    state_store = PlaybackStateStore(store)
+    player = window.findChild(QMediaPlayer)
+    audio_output = window.findChild(QAudioOutput)
+
     try:
         style = SubtitleStyle(
             font_size=int(store.value("subtitle/font_size", 20)),
@@ -54,6 +60,69 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_me
         nonlocal style
         style = replace(style, **changes)
         apply_style()
+
+    def current_source() -> str:
+        if player is None:
+            return ""
+        try:
+            return player.source().toString()
+        except (AttributeError, RuntimeError):
+            return ""
+
+    def save_player_state() -> None:
+        if player is None:
+            return
+        source = current_source()
+        if not source:
+            return
+        try:
+            rate = float(player.playbackRate())
+            audio_index = int(player.activeAudioTrack())
+            video_index = int(player.activeVideoTrack())
+            subtitle_index = int(player.activeSubtitleTrack())
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return
+        volume = float(audio_output.volume()) if audio_output is not None else 1.0
+        muted = bool(audio_output.isMuted()) if audio_output is not None else False
+        state_store.save_source(
+            source,
+            PlaybackState(
+                playback_rate=rate,
+                volume=volume,
+                muted=muted,
+                audio_track=audio_index,
+                video_track=video_index,
+                subtitle_track=subtitle_index,
+                external_subtitle=subtitle_engine.source,
+            ),
+        )
+
+    def restore_player_state() -> None:
+        if player is None:
+            return
+        source = current_source()
+        if not source:
+            return
+        state = state_store.load_source(source)
+        try:
+            player.setPlaybackRate(state.playback_rate)
+        except (AttributeError, RuntimeError):
+            pass
+        if audio_output is not None:
+            try:
+                audio_output.setVolume(state.volume)
+                audio_output.setMuted(state.muted)
+            except (AttributeError, RuntimeError):
+                pass
+        try:
+            if state.audio_track >= 0:
+                player.setActiveAudioTrack(state.audio_track)
+            if state.video_track >= 0:
+                player.setActiveVideoTrack(state.video_track)
+            if state.subtitle_track >= 0:
+                player.setActiveSubtitleTrack(state.subtitle_track)
+        except (AttributeError, RuntimeError):
+            pass
 
     settings_menu = parent_menu.addMenu("Subtitle settings")
     sync_menu = settings_menu.addMenu("Subtitle sync")
@@ -109,9 +178,29 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_me
     reset = style_menu.addAction("Reset styling")
     reset.triggered.connect(lambda: update_style(font_size=20, bottom_margin=24, background_opacity=150, bold=True))
 
+    if player is not None:
+        player.sourceChanged.connect(lambda _source: restore_player_state())
+        player.tracksChanged.connect(lambda: restore_player_state())
+        player.activeTracksChanged.connect(save_player_state)
+        player.playbackRateChanged.connect(lambda _rate: save_player_state())
+    if audio_output is not None:
+        audio_output.volumeChanged.connect(lambda _value: save_player_state())
+        audio_output.mutedChanged.connect(lambda _muted: save_player_state())
+
+    try:
+        preferences = state_store.load_preferences()
+        if player is not None:
+            player.setPlaybackRate(preferences.playback_rate)
+        if audio_output is not None:
+            audio_output.setVolume(preferences.volume)
+            audio_output.setMuted(preferences.muted)
+    except (AttributeError, RuntimeError):
+        pass
+
     apply_style()
     QShortcut(QKeySequence("["), window).activated.connect(lambda: adjust_sync(-500))
     QShortcut(QKeySequence("]"), window).activated.connect(lambda: adjust_sync(500))
+    window.destroyed.connect(lambda: save_player_state())
     return apply_style
 
 
