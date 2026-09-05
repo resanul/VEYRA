@@ -26,7 +26,7 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -e '.[test]' pyinstaller
 
       - name: Syntax check
-        run: python -m compileall -q src tests build_entry.py
+        run: python -m compileall -q src tests build_entry.py runtime/veyra_cs3_runtime.py
 
       - name: Tests
         run: python -m pytest -q
@@ -39,13 +39,38 @@ jobs:
           pyinstaller --noconfirm --clean --windowed --name VEYRA
           --paths src --collect-all PySide6 build_entry.py
 
-      - name: Verify EXE
+      - name: Build CS3 runtime EXE
+        run: >-
+          pyinstaller --noconfirm --clean --console --onefile
+          --name veyra-cs3-runtime --paths src runtime/veyra_cs3_runtime.py
+
+      - name: Assemble Windows package
         shell: pwsh
         run: |
+          Copy-Item 'dist/veyra-cs3-runtime.exe' 'dist/VEYRA/veyra-cs3-runtime.exe' -Force
           if (-not (Test-Path 'dist/VEYRA/VEYRA.exe')) {
             Write-Error 'VEYRA.exe was not produced.'
           }
-          Get-Item 'dist/VEYRA/VEYRA.exe' | Format-List FullName,Length
+          if (-not (Test-Path 'dist/VEYRA/veyra-cs3-runtime.exe')) {
+            Write-Error 'veyra-cs3-runtime.exe was not produced.'
+          }
+          Get-Item 'dist/VEYRA/VEYRA.exe', 'dist/VEYRA/veyra-cs3-runtime.exe' |
+            Format-Table FullName,Length
+
+      - name: Runtime smoke test
+        shell: pwsh
+        run: |
+          $result = & 'dist/VEYRA/veyra-cs3-runtime.exe' 2>$null | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "CS3 runtime exited with code $LASTEXITCODE"
+          }
+          if (-not $result) {
+            Write-Error 'CS3 runtime produced no protocol response.'
+          }
+          $response = $result | ConvertFrom-Json
+          if ($response.protocol -ne 1 -or $response.ok -ne $true) {
+            Write-Error "Unexpected CS3 runtime health response: $result"
+          }
 
       - name: Package Windows artifact
         shell: pwsh
