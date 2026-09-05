@@ -26,6 +26,10 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install FFmpeg
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+
       - name: Install test dependencies
         shell: pwsh
         run: |
