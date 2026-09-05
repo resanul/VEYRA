@@ -1,0 +1,63 @@
+name: CS3 Android E2E
+
+on:
+  push:
+    paths:
+      - "tests/test_cs3_android_e2e.py"
+      - "runtime/android-host/**"
+      - "src/veyra/extensions/cs3_runtime/android_executor.py"
+      - ".github/workflows/cs3-android-e2e.yml"
+  workflow_dispatch:
+
+env:
+  GRADLE_VERSION: "8.9"
+  PLUGIN_URL: "https://raw.githubusercontent.com/doGior/doGiorsHadEnough/builds/YouTube.cs3"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "${{ env.GRADLE_VERSION }}"
+
+      - name: Build Android CS3 runtime
+        working-directory: runtime/android-host
+        run: gradle --no-daemon :app:assembleDebug
+
+      - name: Run real CS3 provider on Android ART
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          VeyraCs3Apk: ${{ github.workspace }}/runtime/android-host/app/build/outputs/apk/debug/app-debug.apk
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          cores: 2
+          ram-size: 4096M
+          heap-size: 1024M
+          script: |
+            adb logcat -c
+            VeyraCs3Apk="$VeyraCs3Apk" VeyraCs3E2ePluginUrl="${{ env.PLUGIN_URL }}" python - <<'PY'
+            import os
+            os.environ["VEYRA_CS3_APK"] = os.environ["VeyraCs3Apk"]
+            os.environ["VEYRA_CS3_E2E_PLUGIN_URL"] = os.environ["VeyraCs3E2ePluginUrl"]
+            from tests.test_cs3_android_e2e import main
+            main()
+            PY
+
+      - name: Dump Android log on failure
+        if: failure()
+        run: adb logcat -d -v time | tail -n 500 || true
