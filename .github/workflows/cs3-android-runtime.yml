@@ -1,0 +1,40 @@
+name: CS3 Android Runtime
+
+on:
+  push:
+    paths:
+      - "runtime/android-host/**"
+      - "src/veyra/extensions/cs3_runtime/android_executor.py"
+      - ".github/workflows/cs3-android-runtime.yml"
+  workflow_dispatch:
+
+jobs:
+  build-runtime:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runtime/android-host
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build Android runtime
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Upload runtime APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: veyra-cs3-android-runtime
+          path: runtime/android-host/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
