@@ -8,11 +8,10 @@ from veyra.providers.models import StreamSource
 
 pytestmark = pytest.mark.e2e
 
-# Public, clear test streams maintained for player compatibility testing.
-# Apple documents HLS sample streams for playback testing; the DASH sample is
-# hosted by Akamai's MPEG-DASH test corpus.
+# Public, clear test streams used by established player projects for
+# compatibility/regression testing.
 HLS_URL = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"
-DASH_URL = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd"
+DASH_URL = "https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd"
 
 
 def _play_remote_adaptive_stream(url: str) -> tuple[bool, str | None, int]:
