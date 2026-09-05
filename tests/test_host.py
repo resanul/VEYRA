@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from veyra.extensions.cs3 import CS3Provider, CS3RuntimeAdapter
+from veyra.extensions.cs3 import CS3Provider
 from veyra.extensions.host import load_enabled_providers
 
 
