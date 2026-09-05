@@ -60,7 +60,15 @@ jobs:
       - name: Runtime smoke test
         shell: pwsh
         run: |
-          $result = & 'dist/VEYRA/veyra-cs3-runtime.exe' 2>$null | Select-Object -First 1
+          $smoke = Join-Path $env:RUNNER_TEMP 'veyra-cs3-smoke'
+          New-Item -ItemType Directory -Force -Path $smoke | Out-Null
+          $manifest = '{"name":"Smoke Test","internalName":"smoke","version":1}'
+          Set-Content -Path (Join-Path $smoke 'manifest.json') -Value $manifest -Encoding utf8
+          Compress-Archive -Path (Join-Path $smoke 'manifest.json') -DestinationPath (Join-Path $smoke 'smoke.cs3') -Force
+
+          $package = (Join-Path $smoke 'smoke.cs3').Replace('\', '/')
+          $request = '{"protocol":1,"method":"health","package":"' + $package + '","payload":{}}'
+          $result = $request | & 'dist/VEYRA/veyra-cs3-runtime.exe' 2>$null | Select-Object -First 1
           if ($LASTEXITCODE -ne 0) {
             Write-Error "CS3 runtime exited with code $LASTEXITCODE"
           }
@@ -71,6 +79,10 @@ jobs:
           if ($response.protocol -ne 1 -or $response.ok -ne $true) {
             Write-Error "Unexpected CS3 runtime health response: $result"
           }
+          if ($response.dex_execution -ne $false) {
+            Write-Error "Unexpected DEX execution state: $result"
+          }
+          Write-Host "CS3 runtime smoke test passed: $result"
 
       - name: Package Windows artifact
         shell: pwsh
