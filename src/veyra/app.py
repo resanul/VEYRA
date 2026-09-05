@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .history import PlaybackHistory
 from .models import MediaItem
+from .playback_tracks import TrackKind, format_track_label, make_track_info
 from .providers.stream_request import PlayRequest
 
 
@@ -21,8 +22,23 @@ def _fmt_ms(value: int) -> str:
 def main() -> int:
     try:
         from PySide6.QtCore import Qt, QUrl
-        from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QPushButton, QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget
-        from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+        from PySide6.QtGui import QKeySequence, QShortcut
+        from PySide6.QtWidgets import (
+            QApplication,
+            QFileDialog,
+            QHBoxLayout,
+            QLabel,
+            QMainWindow,
+            QMenu,
+            QMessageBox,
+            QPushButton,
+            QSlider,
+            QSpinBox,
+            QStackedWidget,
+            QVBoxLayout,
+            QWidget,
+        )
+        from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
         from PySide6.QtMultimediaWidgets import QVideoWidget
         from .extensions.host import load_enabled_providers
         from .providers.catalog_view import CatalogView
@@ -94,9 +110,11 @@ def main() -> int:
     forward_btn = QPushButton("+10s")
     stop_btn = QPushButton("Stop")
     fullscreen_btn = QPushButton("Fullscreen")
+    tracks_btn = QPushButton("Tracks")
+    stream_info_btn = QPushButton("Stream Info")
 
     controls = QHBoxLayout()
-    for button in (play_btn, back_btn, forward_btn, stop_btn, fullscreen_btn):
+    for button in (play_btn, back_btn, forward_btn, stop_btn, fullscreen_btn, tracks_btn, stream_info_btn):
         controls.addWidget(button)
     controls.addWidget(QLabel("Volume"))
     controls.addWidget(volume)
@@ -116,6 +134,93 @@ def main() -> int:
     root = QWidget()
     root.setLayout(root_layout)
     window.setCentralWidget(root)
+
+    tracks_menu = QMenu(window)
+    audio_menu = tracks_menu.addMenu("Audio")
+    video_menu = tracks_menu.addMenu("Video")
+    subtitle_menu = tracks_menu.addMenu("Subtitles")
+    tracks_btn.setMenu(tracks_menu)
+
+    def _meta_text(metadata, key) -> str | None:
+        try:
+            value = metadata.stringValue(key)
+        except (AttributeError, TypeError, RuntimeError):
+            try:
+                value = metadata.value(key)
+            except (AttributeError, TypeError, RuntimeError):
+                return None
+        text = str(value).strip()
+        return text if text and text.lower() not in {"unknown", "unspecified", "none"} else None
+
+    def _track_detail(metadata, kind: TrackKind) -> tuple[str | None, str | None, str | None]:
+        language = _meta_text(metadata, QMediaMetaData.Key.Language)
+        title_text = _meta_text(metadata, QMediaMetaData.Key.Title)
+        codec_key = QMediaMetaData.Key.AudioCodec if kind is TrackKind.AUDIO else QMediaMetaData.Key.VideoCodec
+        codec = _meta_text(metadata, codec_key) if kind is not TrackKind.SUBTITLE else None
+        detail = None
+        if kind is TrackKind.VIDEO:
+            try:
+                resolution = metadata.value(QMediaMetaData.Key.Resolution)
+                if resolution and hasattr(resolution, "width") and hasattr(resolution, "height"):
+                    width = int(resolution.width())
+                    height = int(resolution.height())
+                    if width and height:
+                        detail = f"{width}x{height}"
+            except (AttributeError, TypeError, RuntimeError, ValueError):
+                pass
+        return title_text, language, codec if codec else detail
+
+    def _populate_track_menu(menu: QMenu, tracks, kind: TrackKind, active_index: int, setter) -> None:
+        menu.clear()
+        menu.setEnabled(bool(tracks) or kind is TrackKind.SUBTITLE)
+        off = menu.addAction("Off")
+        off.setCheckable(True)
+        off.setChecked(active_index < 0)
+        off.triggered.connect(lambda _checked, value=-1: setter(value))
+        if not tracks:
+            if kind is TrackKind.SUBTITLE:
+                note = menu.addAction("No embedded subtitles")
+                note.setEnabled(False)
+            else:
+                off.setEnabled(False)
+            return
+        menu.addSeparator()
+        for index, metadata in enumerate(tracks):
+            title_text, language, codec = _track_detail(metadata, kind)
+            detail = None
+            if kind is TrackKind.VIDEO:
+                try:
+                    resolution = metadata.value(QMediaMetaData.Key.Resolution)
+                    if resolution and hasattr(resolution, "width") and hasattr(resolution, "height"):
+                        width = int(resolution.width())
+                        height = int(resolution.height())
+                        if width and height:
+                            detail = f"{width}x{height}"
+                except (AttributeError, TypeError, RuntimeError, ValueError):
+                    pass
+            info = make_track_info(
+                kind,
+                index,
+                title=title_text,
+                language=language,
+                codec=codec,
+                detail=detail,
+            )
+            action = menu.addAction(format_track_label(info))
+            action.setCheckable(True)
+            action.setChecked(index == active_index)
+            action.triggered.connect(lambda _checked, value=index: setter(value))
+
+    def rebuild_track_menus() -> None:
+        try:
+            _populate_track_menu(audio_menu, player.audioTracks(), TrackKind.AUDIO, player.activeAudioTrack(), player.setActiveAudioTrack)
+            _populate_track_menu(video_menu, player.videoTracks(), TrackKind.VIDEO, player.activeVideoTrack(), player.setActiveVideoTrack)
+            _populate_track_menu(subtitle_menu, player.subtitleTracks(), TrackKind.SUBTITLE, player.activeSubtitleTrack(), player.setActiveSubtitleTrack)
+        except (AttributeError, RuntimeError):
+            audio_menu.clear()
+            video_menu.clear()
+            subtitle_menu.clear()
+            tracks_btn.setEnabled(False)
 
     def load_source(request: PlayRequest | object) -> None:
         nonlocal current, current_request
@@ -147,9 +252,12 @@ def main() -> int:
             details_text.append(f"{len(source.headers)} request headers")
             details_text.append("network proxy")
         if source.subtitles:
-            details_text.append(f"{len(source.subtitles)} subtitle(s)")
+            details_text.append(f"{len(source.subtitles)} subtitle source(s)")
         player_status.setText(" · ".join(details_text))
+        tracks_btn.setEnabled(True)
+        stream_info_btn.setEnabled(True)
         pages.setCurrentWidget(player_page)
+        rebuild_track_menus()
 
     def open_media() -> None:
         path, _ = QFileDialog.getOpenFileName(window, "Open media", str(Path.home()), "Media (*.mp4 *.mkv *.webm *.avi *.mov *.m4v *.ts *.m2ts *.mp3 *.flac *.aac *.wav *.ogg *.opus *.m4a);;All files (*.*)")
@@ -167,6 +275,28 @@ def main() -> int:
 
     def toggle_fullscreen() -> None:
         video.setFullScreen(not video.isFullScreen())
+
+    def show_stream_info() -> None:
+        if current_request is None:
+            return
+        source = current_request.source
+        lines = [
+            f"Title: {current.title if current else current_request.title or 'Unknown'}",
+            f"URL: {source.url}",
+            f"Quality: {source.quality or 'auto'}",
+            f"Format: {source.format or 'auto'}",
+            f"Subtitle sources: {len(source.subtitles)}",
+            "",
+            "Request headers:",
+        ]
+        sensitive = {"authorization", "proxy-authorization", "cookie", "set-cookie"}
+        if source.headers:
+            for name, value in source.headers.items():
+                shown = "<redacted>" if name.lower() in sensitive else value
+                lines.append(f"  {name}: {shown}")
+        else:
+            lines.append("  none")
+        QMessageBox.information(window, "Stream Info", "\n".join(lines))
 
     def on_position(value: int) -> None:
         if not seek.isSliderDown():
@@ -224,14 +354,31 @@ def main() -> int:
     forward_btn.clicked.connect(lambda: jump(10_000))
     stop_btn.clicked.connect(player.stop)
     fullscreen_btn.clicked.connect(toggle_fullscreen)
+    stream_info_btn.clicked.connect(show_stream_info)
     seek.sliderMoved.connect(player.setPosition)
     volume.valueChanged.connect(lambda value: audio.setVolume(value / 100.0))
     speed.valueChanged.connect(lambda value: player.setPlaybackRate(value / 100.0))
     player.positionChanged.connect(on_position)
     player.durationChanged.connect(on_duration)
+    player.tracksChanged.connect(rebuild_track_menus)
+    player.activeTracksChanged.connect(rebuild_track_menus)
     player.mediaStatusChanged.connect(lambda _: persist_position())
+    player.bufferProgressChanged.connect(lambda value: status.setText(f"Buffering: {value * 100:.0f}%") if 0.0 < value < 1.0 else None)
     player.errorOccurred.connect(lambda _error, message: status.setText(f"Playback error: {message}"))
     app.aboutToQuit.connect(media_proxy.close)
+
+    QShortcut(QKeySequence("Space"), window).activated.connect(toggle_playback)
+    QShortcut(QKeySequence("Left"), window).activated.connect(lambda: jump(-5_000))
+    QShortcut(QKeySequence("Right"), window).activated.connect(lambda: jump(5_000))
+    QShortcut(QKeySequence("Shift+Left"), window).activated.connect(lambda: jump(-30_000))
+    QShortcut(QKeySequence("Shift+Right"), window).activated.connect(lambda: jump(30_000))
+    QShortcut(QKeySequence("M"), window).activated.connect(lambda: audio.setMuted(not audio.isMuted()))
+    QShortcut(QKeySequence("F"), window).activated.connect(toggle_fullscreen)
+    QShortcut(QKeySequence("Escape"), window).activated.connect(lambda: video.setFullScreen(False))
+
+    tracks_btn.setEnabled(False)
+    stream_info_btn.setEnabled(False)
+    rebuild_track_menus()
 
     if registry.all():
         load_extension()
