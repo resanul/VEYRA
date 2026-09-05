@@ -18,6 +18,9 @@ veyra = "veyra.app:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "e2e: real media/network playback tests requiring the Qt multimedia runtime",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
