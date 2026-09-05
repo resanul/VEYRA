@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import quote
 
 from .models import SearchResult, StreamSource
 
@@ -29,13 +28,13 @@ class LocalMediaProvider:
             if not root.exists():
                 continue
             try:
-                iterator = root.rglob("*")
-                for path in iterator:
-                    if not path.is_file() or path.suffix.casefold() not in VIDEO_EXTENSIONS | AUDIO_EXTENSIONS:
+                for path in root.rglob("*"):
+                    suffix = path.suffix.casefold()
+                    if not path.is_file() or suffix not in VIDEO_EXTENSIONS | AUDIO_EXTENSIONS:
                         continue
                     if needle not in path.name.casefold():
                         continue
-                    kind = "video" if path.suffix.casefold() in VIDEO_EXTENSIONS else "audio"
+                    kind = "video" if suffix in VIDEO_EXTENSIONS else "audio"
                     results.append(SearchResult(
                         id=str(path.resolve()),
                         title=path.stem,
@@ -48,5 +47,5 @@ class LocalMediaProvider:
 
     def streams(self, item: SearchResult) -> list[StreamSource]:
         if item.url.startswith("file://"):
-            return [StreamSource(url=item.url, quality="original", format=Path(quote(item.url, safe=":/%')).suffix or None)]
+            return [StreamSource(url=item.url, quality="original")]
         return []
