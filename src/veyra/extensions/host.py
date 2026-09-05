@@ -22,7 +22,10 @@ factory = getattr(module, "create_provider", None)
 provider = factory() if callable(factory) else getattr(module, "Provider")()
 request = json.loads(sys.stdin.read() or "{}")
 argument = request.get("query") if method == "search" else request.get("item")
-result = getattr(provider, method)(argument)
+if method == "home":
+    result = provider.home()
+else:
+    result = getattr(provider, method)(argument)
 def encode(value):
     if hasattr(value, "__dataclass_fields__"):
         return {k: encode(getattr(value, k)) for k in value.__dataclass_fields__}
@@ -54,6 +57,9 @@ class IsolatedProvider:
             raise RuntimeError(completed.stderr.strip() or "extension provider failed")
         value = json.loads(completed.stdout)
         return value if isinstance(value, list) else []
+
+    def home(self):
+        return [SearchResult(**row) for row in self._call("home", {})]
 
     def search(self, query: str):
         return [SearchResult(**row) for row in self._call("search", {"query": query})]
