@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import time
-
 import pytest
 
 from veyra.providers.media_proxy import MediaStreamProxy
@@ -11,7 +8,10 @@ from veyra.providers.models import StreamSource
 
 pytestmark = pytest.mark.e2e
 
-HLS_URL = "https://devimages.apple.com/iphone/samples/bipbop/bipbopall.m3u8"
+# Public, clear test streams maintained for player compatibility testing.
+# Apple documents HLS sample streams for playback testing; the DASH sample is
+# hosted by Akamai's MPEG-DASH test corpus.
+HLS_URL = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"
 DASH_URL = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd"
 
 
@@ -19,7 +19,7 @@ def _play_remote_adaptive_stream(url: str) -> tuple[bool, str | None, int]:
     from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer, QUrl
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
-    app = QCoreApplication.instance() or QCoreApplication([])
+    QCoreApplication.instance() or QCoreApplication([])
     proxy = MediaStreamProxy()
     player = QMediaPlayer()
     audio = QAudioOutput()
