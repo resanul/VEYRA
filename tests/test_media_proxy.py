@@ -38,9 +38,14 @@ def test_hls_manifest_rewrites_uri_and_segments() -> None:
         token = "test-token"
         body = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"keys/key.bin\"\n#EXTINF:5,\nsegments/one.ts\n"
         rewritten = server.rewrite_manifest("https://cdn.example/path/master.m3u8", body.encode(), token).decode()
-        assert f"/stream/{token}/" in rewritten
-        assert "keys/key.bin" in parse_qs(urlsplit(rewritten.split("URI=\"", 1)[1].split("\"", 1)[0]).query)["url"][0]
-        assert "segments/one.ts" in parse_qs(urlsplit(rewritten.rsplit("\n", 2)[1]).query)["url"][0]
+        key_url = rewritten.split('URI="', 1)[1].split('"', 1)[0]
+        segment_url = rewritten.splitlines()[-1]
+        key_parts = urlsplit(key_url)
+        segment_parts = urlsplit(segment_url)
+        assert key_parts.path == f"/stream/{token}"
+        assert segment_parts.path == f"/stream/{token}"
+        assert "keys/key.bin" in parse_qs(key_parts.query)["url"][0]
+        assert "segments/one.ts" in parse_qs(segment_parts.query)["url"][0]
     finally:
         server.server_close()
 
@@ -52,8 +57,14 @@ def test_dash_manifest_rewrites_segment_attributes_and_base_url() -> None:
         body = "<MPD><BaseURL>video/</BaseURL><SegmentTemplate media=\"chunk-$Number$.m4s\" initialization=\"init.mp4\"/></MPD>"
         rewritten = server.rewrite_manifest("https://cdn.example/path/manifest.mpd", body.encode(), token).decode()
         assert "$Number$" in rewritten
-        assert "video/" in parse_qs(urlsplit(rewritten.split("<BaseURL>", 1)[1].split("</BaseURL>", 1)[0]).query)["url"][0]
-        assert "chunk-$Number$.m4s" in parse_qs(urlsplit(rewritten.split('media="', 1)[1].split('"', 1)[0]).query)["url"][0]
-        assert "init.mp4" in parse_qs(urlsplit(rewritten.split('initialization="', 1)[1].split('"', 1)[0]).query)["url"][0]
+        base_url = rewritten.split("<BaseURL>", 1)[1].split("</BaseURL>", 1)[0]
+        media_url = rewritten.split('media="', 1)[1].split('"', 1)[0]
+        init_url = rewritten.split('initialization="', 1)[1].split('"', 1)[0]
+        assert "video/" in parse_qs(urlsplit(base_url).query)["url"][0]
+        assert "chunk-$Number$.m4s" in parse_qs(urlsplit(media_url).query)["url"][0]
+        assert "init.mp4" in parse_qs(urlsplit(init_url).query)["url"][0]
+        assert urlsplit(base_url).path == f"/stream/{token}"
+        assert urlsplit(media_url).path == f"/stream/{token}"
+        assert urlsplit(init_url).path == f"/stream/{token}"
     finally:
         server.server_close()
