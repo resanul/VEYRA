@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .cs3_api import CloudStreamApiBridge, CS3ProviderInfo, search_result_from_cloudstream, stream_source_from_cloudstream
+from .cs3_runtime.cloudstream_lifecycle import CloudStreamLifecycleAdapter
 from .cs3_runtime.discovery import discover_runtime
 from veyra.providers.models import SearchResult, StreamSource
 
@@ -117,24 +118,30 @@ class CS3Provider:
     def _response(self, method: str, payload: dict) -> dict:
         return self.runtime.request(method, self.package, payload)
 
+    def lifecycle(self) -> CloudStreamLifecycleAdapter:
+        """Return the CloudStream MainAPI/ExtractorApi lifecycle adapter."""
+        return CloudStreamLifecycleAdapter(lambda method, payload: self._response(method, payload))
+
     def home(self) -> list[SearchResult]:
-        return [search_result_from_cloudstream(x) for x in self._response("home", {}).get("items", []) if isinstance(x, dict)]
+        return list(self.lifecycle().get_main_page().home_pages[0].items) if self.lifecycle().get_main_page().home_pages else []
 
     def search(self, query: str) -> list[SearchResult]:
-        return [search_result_from_cloudstream(x) for x in self._response("search", {"query": query}).get("items", []) if isinstance(x, dict)]
+        return list(self.lifecycle().search(query).results)
 
     def streams(self, item: SearchResult) -> list[StreamSource]:
-        payload = {"item": {"id": item.id, "title": item.title, "url": item.url, "kind": item.kind, "year": item.year, "poster": item.poster, "metadata": dict(item.metadata)}}
-        return [stream_source_from_cloudstream(x) for x in self._response("streams", payload).get("streams", []) if isinstance(x, dict)]
+        return list(self.lifecycle().streams(item).streams)
+
+    def load(self, url: str):
+        return self.lifecycle().load(url)
+
+    def load_links(self, url: str, *, referer: str | None = None, data: str | None = None):
+        return self.lifecycle().load_links(url, referer=referer, data=data)
 
     def registration(self) -> CS3ProviderInfo | None:
-        response = self._response("providers", {})
-        bridge = CloudStreamApiBridge()
-        for provider in response.get("providers", []):
-            if isinstance(provider, dict):
-                info = bridge.register_main_api(provider)
-                if info.id == self.id or self.info is None:
-                    self.info = info
+        response = self.lifecycle().providers()
+        for info in response.providers:
+            if info.id == self.id or self.info is None:
+                self.info = info
         return self.info
 
 
