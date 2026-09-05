@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
 
-from .models import MediaItem
+from .models import MediaItem, MediaType
 
 
 class MediaLibrary:
@@ -24,12 +24,16 @@ class MediaLibrary:
         if isinstance(data, list):
             for row in data:
                 if isinstance(row, dict) and {"id", "title", "source", "media_type"} <= row.keys():
+                    try:
+                        media_type = MediaType(row["media_type"])
+                    except ValueError:
+                        continue
                     self.items.append(
                         MediaItem(
                             id=str(row["id"]),
                             title=str(row["title"]),
                             source=str(row["source"]),
-                            media_type=row["media_type"],
+                            media_type=media_type,
                         )
                     )
 
