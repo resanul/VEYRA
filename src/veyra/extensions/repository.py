@@ -17,6 +17,7 @@ class RemoteExtension:
     author: str = ""
     icon_url: str | None = None
     sha256: str | None = None
+    package_type: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -144,10 +145,14 @@ class RepositoryManager:
             extension_id = str(row.get("id") or row.get("internalName") or name.lower().replace(" ", "-"))
             authors = row.get("authors", [])
             author = ", ".join(map(str, authors)) if isinstance(authors, list) else str(row.get("author") or "")
+            url = urljoin(base_url, str(row["url"]))
+            package_type = str(row.get("packageType") or row.get("package_type") or "").lower()
+            if not package_type:
+                package_type = "cs3" if urlparse(url).path.lower().endswith(".cs3") else "veyra"
             result.append(RemoteExtension(
                 id=extension_id, name=name, version=str(row.get("version", "1")),
-                url=urljoin(base_url, str(row["url"])), description=str(row.get("description") or ""),
+                url=url, description=str(row.get("description") or ""),
                 author=author, icon_url=row.get("iconUrl") or row.get("icon_url"),
-                sha256=row.get("fileHash") or row.get("sha256"),
+                sha256=row.get("fileHash") or row.get("sha256"), package_type=package_type,
             ))
         return result
