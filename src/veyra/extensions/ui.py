@@ -7,12 +7,13 @@ from .repository import RepositoryManager, RemoteExtension, ExtensionRepository
 
 
 class RepositoryDialog(QDialog):
-    """Repository catalog with install, enable/disable and uninstall actions."""
+    """Repository catalog with install, load, enable/disable and uninstall actions."""
 
-    def __init__(self, parent=None, manager: RepositoryManager | None = None) -> None:
+    def __init__(self, parent=None, manager: RepositoryManager | None = None, on_loaded=None) -> None:
         super().__init__(parent)
         self.manager = manager or RepositoryManager()
         self.installer = ExtensionInstaller()
+        self.on_loaded = on_loaded
         self.plugins_data: list[RemoteExtension] = []
         self.setWindowTitle("VEYRA Extensions")
         self.resize(820, 560)
@@ -20,16 +21,19 @@ class RepositoryDialog(QDialog):
         self.repositories = QListWidget()
         self.plugins = QListWidget()
         self.repositories.currentRowChanged.connect(lambda _: self.refresh_plugins())
+        self.plugins.itemDoubleClicked.connect(lambda _: self.load_selected())
         add = QPushButton("Add repository")
         refresh = QPushButton("Refresh")
         remove_repo = QPushButton("Remove repository")
         install = QPushButton("Install / Update")
+        load = QPushButton("Load selected")
         toggle = QPushButton("Enable / Disable")
         uninstall = QPushButton("Uninstall")
         add.clicked.connect(self.add_repository)
         refresh.clicked.connect(self.refresh_plugins)
         remove_repo.clicked.connect(self.remove_repository)
         install.clicked.connect(self.install_selected)
+        load.clicked.connect(self.load_selected)
         toggle.clicked.connect(self.toggle_selected)
         uninstall.clicked.connect(self.uninstall_selected)
         root = QVBoxLayout(self)
@@ -43,7 +47,7 @@ class RepositoryDialog(QDialog):
         root.addWidget(QLabel("Extensions"))
         root.addWidget(self.plugins)
         bottom = QHBoxLayout()
-        for button in (install, toggle, uninstall):
+        for button in (install, load, toggle, uninstall):
             bottom.addWidget(button)
         root.addLayout(bottom)
         self.reload_repositories()
@@ -52,6 +56,8 @@ class RepositoryDialog(QDialog):
         self.repositories.clear()
         for repo in self.manager.repositories.values():
             self.repositories.addItem(f"{repo.name} - {repo.url}")
+        if self.repositories.count():
+            self.repositories.setCurrentRow(0)
 
     def _repo(self) -> ExtensionRepository | None:
         repos = list(self.manager.repositories.values())
@@ -68,7 +74,8 @@ class RepositoryDialog(QDialog):
             QMessageBox.warning(self, "Repository error", str(exc))
             return
         self.reload_repositories()
-        self.repositories.setCurrentRow(max(0, self.repositories.count() - 1))
+        row = list(self.manager.repositories).index(repo.url)
+        self.repositories.setCurrentRow(row)
         self.status.setText(f"Repository loaded: {repo.name}")
 
     def refresh_plugins(self) -> None:
@@ -104,6 +111,26 @@ class RepositoryDialog(QDialog):
             return
         self.status.setText(f"Installed: {path}")
         self.refresh_plugins()
+
+    def load_selected(self) -> None:
+        plugin = self._plugin()
+        if plugin is None:
+            return
+        if not self.installer.is_installed(plugin):
+            try:
+                self.installer.install(plugin)
+            except (OSError, ValueError, TypeError) as exc:
+                QMessageBox.warning(self, "Load failed", str(exc))
+                return
+        try:
+            self.installer.set_enabled(plugin.id, True)
+        except (KeyError, OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Load failed", str(exc))
+            return
+        self.status.setText(f"Loading {plugin.name}…")
+        if callable(self.on_loaded):
+            self.on_loaded(plugin)
+        self.accept()
 
     def toggle_selected(self) -> None:
         plugin = self._plugin()
