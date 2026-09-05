@@ -84,6 +84,10 @@ class ExternalCS3Executor:
         """Send one CS3 RPC request to the isolated execution backend."""
         return self.execute(method, package, payload)
 
+    def capabilities(self, package: Path) -> ExecutorCapabilities:
+        """Query backend capabilities using the same isolated RPC boundary."""
+        return ExecutorCapabilities.from_response(self.request("health", package, {}))
+
     def execute(self, method: str, package: Path, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.available:
             raise CS3ExecutorUnavailable(
