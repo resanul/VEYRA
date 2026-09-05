@@ -125,3 +125,50 @@ class ExternalCS3Executor:
         if response.get("error"):
             raise CS3ExecutorError(str(response["error"]))
         return response
+
+
+class WindowsCS3Executor(ExternalCS3Executor):
+    """Windows-only transport for a genuine DEX-capable CS3 worker.
+
+    The worker is intentionally external to the GUI process. VEYRA never
+    pretends that CPython can execute Android DEX. The worker must advertise
+    DEX execution plus the CloudStream API bridge before a CS3 provider is
+    considered runnable.
+    """
+
+    def __init__(self, executable: Path | None = None, timeout: float = 45.0) -> None:
+        if os.name != "nt":
+            raise CS3ExecutorUnavailable("Windows CS3 executor is only available on Windows")
+        super().__init__(executable or self.discover_windows(), timeout=timeout)
+
+    @staticmethod
+    def discover_windows() -> Path | None:
+        configured = os.environ.get("VEYRA_CS3_EXECUTOR")
+        if configured:
+            path = Path(configured).expanduser()
+            return path if path.is_file() else None
+        here = Path(__file__).resolve()
+        candidates = (
+            here.parent / "veyra-cs3-executor.exe",
+            here.parents[4] / "runtime" / "veyra-cs3-executor.exe",
+            Path(sys.prefix) / "Scripts" / "veyra-cs3-executor.exe",
+            Path(sys.executable).resolve().parent / "veyra-cs3-executor.exe",
+        )
+        for candidate in dict.fromkeys(candidates):
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def ensure_capable(self, package: Path) -> ExecutorCapabilities:
+        if not self.available:
+            raise CS3ExecutorUnavailable(
+                "Windows CS3 worker is not installed. Set VEYRA_CS3_EXECUTOR "
+                "to a trusted veyra-cs3-executor.exe."
+            )
+        capabilities = self.capabilities(package)
+        if not capabilities.real_cs3_execution:
+            raise CS3ExecutorUnavailable(
+                "Windows CS3 worker does not advertise real CS3 execution "
+                "(DEX + Android API + CloudStream API bridge)."
+            )
+        return capabilities
