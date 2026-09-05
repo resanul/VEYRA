@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Veyra</AssemblyName>
+    <RootNamespace>Veyra.App</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Veyra.Core/Veyra.Core.csproj" />
+    <ProjectReference Include="../Veyra.Player/Veyra.Player.csproj" />
+  </ItemGroup>
+</Project>
