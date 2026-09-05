@@ -41,13 +41,16 @@ class ExtensionInstaller:
     def _download(self, extension: RemoteExtension, suffix: str) -> Path:
         temp = Path(tempfile.mkdtemp(prefix="veyra-ext-"))
         archive = temp / f"package{suffix}"
-        request = urllib.request.Request(extension.url, headers={"User-Agent": "VEYRA/0.4"})
-        with urllib.request.urlopen(request, timeout=self.timeout) as response, archive.open("wb") as output:
-            shutil.copyfileobj(response, output)
-        if not self._hash_matches(self._sha256(archive), extension.sha256):
+        try:
+            request = urllib.request.Request(extension.url, headers={"User-Agent": "VEYRA/0.4"})
+            with urllib.request.urlopen(request, timeout=self.timeout) as response, archive.open("wb") as output:
+                shutil.copyfileobj(response, output)
+            if not self._hash_matches(self._sha256(archive), extension.sha256):
+                raise ValueError(f"SHA-256 mismatch for {extension.name}")
+            return archive
+        except Exception:
             shutil.rmtree(temp, ignore_errors=True)
-            raise ValueError(f"SHA-256 mismatch for {extension.name}")
-        return archive
+            raise
 
     def install(self, extension: RemoteExtension) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -56,19 +59,18 @@ class ExtensionInstaller:
         if package_type == "cs3" or extension.url.lower().split("?", 1)[0].endswith(".cs3"):
             archive = self._download(extension, ".cs3")
             try:
-                CS3Inspector.inspect(archive)
+                inspection = CS3Inspector.inspect(archive)
+                if inspection.manifest.internal_name != extension.id and inspection.manifest.name != extension.name:
+                    raise ValueError("CS3 manifest does not match repository metadata")
                 if install_dir.exists():
                     shutil.rmtree(install_dir)
                 install_dir.mkdir(parents=True)
                 shutil.copy2(archive, install_dir / f"{extension.id}.cs3")
-                metadata = {
-                    "id": extension.id,
-                    "name": extension.name,
-                    "version": extension.version,
-                    "package_type": "cs3",
-                    "enabled": True,
-                }
-                self._write_metadata(install_dir, metadata)
+                self._write_metadata(install_dir, {
+                    "id": extension.id, "name": extension.name, "version": extension.version,
+                    "package_type": "cs3", "enabled": True,
+                    "internal_name": inspection.manifest.internal_name,
+                })
                 self._set_state(extension.id, extension.name, extension.version, True, "cs3")
                 return install_dir
             finally:
