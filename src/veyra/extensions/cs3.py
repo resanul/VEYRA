@@ -120,10 +120,11 @@ class CS3Provider:
 
     def lifecycle(self) -> CloudStreamLifecycleAdapter:
         """Return the CloudStream MainAPI/ExtractorApi lifecycle adapter."""
-        return CloudStreamLifecycleAdapter(lambda method, payload: self._response(method, payload))
+        return CloudStreamLifecycleAdapter(self._response)
 
     def home(self) -> list[SearchResult]:
-        return list(self.lifecycle().get_main_page().home_pages[0].items) if self.lifecycle().get_main_page().home_pages else []
+        response = self.lifecycle().get_main_page()
+        return list(response.home_pages[0].items) if response.home_pages else []
 
     def search(self, query: str) -> list[SearchResult]:
         return list(self.lifecycle().search(query).results)
