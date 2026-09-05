@@ -144,11 +144,16 @@ class NetworkClient:
             timeout=timeout,
             max_bytes=max_bytes,
         )
+        effective_headers = dict(self.options.headers or {})
+        effective_headers.update(dict(headers or {}))
+        effective_referer = referer or self.options.referer
+        if effective_referer and not any(key.lower() == "referer" for key in effective_headers):
+            effective_headers["Referer"] = effective_referer
         manifest = StreamResolver.parse_manifest(
             response.url,
             response.text,
-            headers=dict(headers or {}),
-            referer=referer,
+            headers=effective_headers,
+            referer=effective_referer,
         )
         return response, manifest
 
