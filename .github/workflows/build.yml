@@ -60,27 +60,59 @@ jobs:
       - name: Runtime smoke test
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $smoke = Join-Path $env:RUNNER_TEMP 'veyra-cs3-smoke'
           New-Item -ItemType Directory -Force -Path $smoke | Out-Null
           $manifest = '{"name":"Smoke Test","internalName":"smoke","version":1}'
-          Set-Content -Path (Join-Path $smoke 'manifest.json') -Value $manifest -Encoding utf8
-          Compress-Archive -Path (Join-Path $smoke 'manifest.json') -DestinationPath (Join-Path $smoke 'smoke.cs3') -Force
+          $manifestPath = Join-Path $smoke 'manifest.json'
+          $packagePath = Join-Path $smoke 'smoke.cs3'
+          Set-Content -Path $manifestPath -Value $manifest -Encoding utf8
+          Compress-Archive -Path $manifestPath -DestinationPath $packagePath -Force
 
-          $package = (Join-Path $smoke 'smoke.cs3').Replace('\', '/')
+          $package = $packagePath.Replace('\', '/')
           $request = '{"protocol":1,"method":"health","package":"' + $package + '","payload":{}}'
-          $result = $request | & 'dist/VEYRA/veyra-cs3-runtime.exe' 2>$null | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "CS3 runtime exited with code $LASTEXITCODE"
+          $runtime = (Resolve-Path 'dist/VEYRA/veyra-cs3-runtime.exe').Path
+
+          $psi = [System.Diagnostics.ProcessStartInfo]::new()
+          $psi.FileName = $runtime
+          $psi.UseShellExecute = $false
+          $psi.CreateNoWindow = $true
+          $psi.RedirectStandardInput = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo = $psi
+          if (-not $process.Start()) {
+            throw 'Failed to start CS3 runtime executable.'
           }
-          if (-not $result) {
-            Write-Error 'CS3 runtime produced no protocol response.'
+
+          $process.StandardInput.WriteLine($request)
+          $process.StandardInput.Close()
+          $stdout = $process.StandardOutput.ReadToEnd()
+          $stderr = $process.StandardError.ReadToEnd()
+          if (-not $process.WaitForExit(30000)) {
+            $process.Kill()
+            throw 'CS3 runtime smoke test timed out after 30 seconds.'
           }
+
+          Write-Host "Runtime exit code: $($process.ExitCode)"
+          if ($stderr) {
+            Write-Host "Runtime stderr: $stderr"
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "CS3 runtime exited with code $($process.ExitCode). stderr: $stderr"
+          }
+          if (-not $stdout.Trim()) {
+            throw 'CS3 runtime produced no protocol response.'
+          }
+
+          $result = ($stdout.Trim() -split "`r?`n")[-1]
           $response = $result | ConvertFrom-Json
           if ($response.protocol -ne 1 -or $response.ok -ne $true) {
-            Write-Error "Unexpected CS3 runtime health response: $result"
+            throw "Unexpected CS3 runtime health response: $result"
           }
           if ($response.dex_execution -ne $false) {
-            Write-Error "Unexpected DEX execution state: $result"
+            throw "Unexpected DEX execution state: $result"
           }
           Write-Host "CS3 runtime smoke test passed: $result"
 
