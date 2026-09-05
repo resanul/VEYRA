@@ -5,15 +5,22 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from .executor import CS3ExecutorError, CS3ExecutorUnavailable, ExternalCS3Executor
+
 PROTOCOL_VERSION = 1
 METHODS = ("health", "providers", "home", "search", "load", "loadLinks", "streams")
 
 
 class RuntimeServer:
-    """JSON-lines CS3 compatibility sidecar."""
+    """JSON-lines CS3 compatibility sidecar with an isolated DEX backend."""
 
-    def __init__(self, handlers: dict[str, Callable[[Path, dict[str, Any]], dict[str, Any]]] | None = None) -> None:
+    def __init__(
+        self,
+        handlers: dict[str, Callable[[Path, dict[str, Any]], dict[str, Any]]] | None = None,
+        executor: ExternalCS3Executor | None = None,
+    ) -> None:
         self.handlers = handlers or {}
+        self.executor = executor or ExternalCS3Executor()
 
     def dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         if request.get("protocol") != PROTOCOL_VERSION:
@@ -26,7 +33,6 @@ class RuntimeServer:
             return self._error("package is required")
         package = Path(package_value).expanduser()
         try:
-            # Lazy import avoids cs3 -> cs3_runtime -> cs3 initialization cycle.
             from ..cs3 import CS3Inspector
             inspection = CS3Inspector.inspect(package)
         except (OSError, ValueError, TypeError) as exc:
@@ -35,16 +41,32 @@ class RuntimeServer:
         if not isinstance(payload, dict):
             payload = {}
         if method == "health":
-            return {"protocol": PROTOCOL_VERSION, "ok": True, "runtime": "veyra-cs3-sidecar-v1", "dex_execution": False}
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "ok": True,
+                "runtime": "veyra-cs3-sidecar-v2",
+                "dex_execution": bool(inspection.has_dex and self.executor.available),
+                "execution_backend": str(self.executor.executable) if self.executor.available else None,
+            }
         handler = self.handlers.get(method)
-        if handler is None:
-            return self._error(f"method '{method}' requires a compatible CS3 execution adapter", code="runtime_unavailable")
         try:
-            response = handler(inspection.path, payload)
+            if handler is not None:
+                response = handler(inspection.path, payload)
+            elif inspection.has_dex:
+                response = self.executor.execute(method, inspection.path, payload)
+            else:
+                return self._error(
+                    f"method '{method}' has no registered handler for this package",
+                    code="runtime_unavailable",
+                )
+        except CS3ExecutorUnavailable as exc:
+            return self._error(str(exc), code="runtime_unavailable")
+        except CS3ExecutorError as exc:
+            return self._error(str(exc), code="executor_error")
         except Exception as exc:
             return self._error(str(exc), code="handler_error")
         if not isinstance(response, dict):
-            return self._error("handler returned a non-object response", code="handler_error")
+            return self._error("runtime returned a non-object response", code="handler_error")
         response.setdefault("protocol", PROTOCOL_VERSION)
         return response
 
