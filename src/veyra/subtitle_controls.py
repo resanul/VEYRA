@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 
-def install_subtitle_controls(window, video, overlay, subtitle_engine, subtitle_menu, *, settings=None):
+def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_menu, *, settings=None):
     """Install persistent subtitle sync/styling actions into the player menu.
 
-    The helper deliberately depends only on Qt widgets supplied by the caller,
-    keeping subtitle presentation independent from the media backend.
+    ``parent_menu`` must not be rebuilt by track discovery; the caller can
+    therefore refresh the embedded-track submenu without deleting these controls.
     """
     from PySide6.QtCore import QSettings
     from PySide6.QtGui import QKeySequence, QShortcut
@@ -15,12 +15,15 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, subtitle_
     from .subtitles import SubtitleStyle
 
     store = settings or QSettings("VEYRA", "VEYRA")
-    style = SubtitleStyle(
-        font_size=int(store.value("subtitle/font_size", 20)),
-        bottom_margin=int(store.value("subtitle/bottom_margin", 24)),
-        background_opacity=int(store.value("subtitle/background_opacity", 150)),
-        bold=str(store.value("subtitle/bold", "true")).lower() in {"1", "true", "yes"},
-    )
+    try:
+        style = SubtitleStyle(
+            font_size=int(store.value("subtitle/font_size", 20)),
+            bottom_margin=int(store.value("subtitle/bottom_margin", 24)),
+            background_opacity=int(store.value("subtitle/background_opacity", 150)),
+            bold=str(store.value("subtitle/bold", "true")).lower() in {"1", "true", "yes"},
+        )
+    except (TypeError, ValueError):
+        style = SubtitleStyle()
 
     def save_style() -> None:
         store.setValue("subtitle/font_size", style.font_size)
@@ -30,7 +33,6 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, subtitle_
         store.sync()
 
     def apply_style() -> None:
-        nonlocal style
         overlay.setStyleSheet(
             "QLabel{color:white;"
             f"background:rgba(0,0,0,{style.background_opacity});"
@@ -51,14 +53,15 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, subtitle_
         style = replace(style, **changes)
         apply_style()
 
-    sync_menu = subtitle_menu.addMenu("Subtitle sync")
+    settings_menu = parent_menu.addMenu("Subtitle settings")
+    sync_menu = settings_menu.addMenu("Subtitle sync")
     sync_minus_1 = sync_menu.addAction("Delay −1.0 s")
     sync_minus = sync_menu.addAction("Delay −0.1 s")
     sync_reset = sync_menu.addAction("Reset delay")
     sync_plus = sync_menu.addAction("Delay +0.1 s")
     sync_plus_1 = sync_menu.addAction("Delay +1.0 s")
     sync_menu.addSeparator()
-    sync_status = sync_menu.addAction("Current: 0.0 s")
+    sync_status = sync_menu.addAction("Current: +0.0 s")
     sync_status.setEnabled(False)
 
     def adjust_sync(delta: int) -> None:
@@ -71,7 +74,7 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, subtitle_
     sync_plus_1.triggered.connect(lambda: adjust_sync(1000))
     sync_reset.triggered.connect(lambda: (subtitle_engine.set_offset(0), sync_status.setText("Current: +0.0 s")))
 
-    style_menu = subtitle_menu.addMenu("Subtitle styling")
+    style_menu = settings_menu.addMenu("Subtitle styling")
     size_menu = style_menu.addMenu("Font size")
     for size in (14, 16, 18, 20, 24, 28, 32):
         action = size_menu.addAction(f"{size}px")
@@ -99,10 +102,8 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, subtitle_
     reset.triggered.connect(lambda: update_style(font_size=20, bottom_margin=24, background_opacity=150, bold=True))
 
     apply_style()
-
     QShortcut(QKeySequence("["), window).activated.connect(lambda: adjust_sync(-500))
     QShortcut(QKeySequence("]"), window).activated.connect(lambda: adjust_sync(500))
-
     return apply_style
 
 
