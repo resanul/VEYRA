@@ -40,6 +40,19 @@ def test_source_track_state_round_trip_and_isolated() -> None:
     assert store.load_source("https://media.test/other.m3u8").audio_track == -1
 
 
+def test_proxy_session_tokens_share_source_state() -> None:
+    settings = QSettings("memory", "veyra-test-proxy")
+    settings.clear()
+    store = PlaybackStateStore(settings)
+    state = PlaybackState(playback_rate=1.75, audio_track=1)
+    first = "http://127.0.0.1:50123/stream/token-a?url=https%3A%2F%2Fmedia.test%2Fmovie.m3u8"
+    second = "http://127.0.0.1:50123/stream/token-b?url=https%3A%2F%2Fmedia.test%2Fmovie.m3u8"
+    store.save_source(first, state)
+    loaded = store.load_source(second)
+    assert loaded.playback_rate == 1.75
+    assert loaded.audio_track == 1
+
+
 def test_state_normalizes_player_preferences() -> None:
     state = PlaybackState(playback_rate=99, volume=-2).normalized()
     assert state.playback_rate == 4.0
