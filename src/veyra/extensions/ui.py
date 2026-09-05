@@ -7,7 +7,7 @@ from .repository import RepositoryManager, RemoteExtension, ExtensionRepository
 
 
 class RepositoryDialog(QDialog):
-    """Repository catalog with install, load, enable/disable and uninstall actions."""
+    """Repository catalog with package-aware install/load controls."""
 
     def __init__(self, parent=None, manager: RepositoryManager | None = None, on_loaded=None) -> None:
         super().__init__(parent)
@@ -93,7 +93,8 @@ class RepositoryDialog(QDialog):
         for plugin in self.plugins_data:
             installed = self.installer.is_installed(plugin)
             state = "Installed/Enabled" if installed and plugin.id in enabled else "Installed/Disabled" if installed else "Available"
-            self.plugins.addItem(f"{plugin.name} v{plugin.version} [{state}] - {plugin.author}")
+            kind = plugin.package_type.upper()
+            self.plugins.addItem(f"{plugin.name} v{plugin.version} [{state}] · {kind} · {plugin.author}")
         self.status.setText(f"Loaded {len(self.plugins_data)} extension(s)")
 
     def _plugin(self) -> RemoteExtension | None:
@@ -109,7 +110,7 @@ class RepositoryDialog(QDialog):
         except (OSError, ValueError, TypeError) as exc:
             QMessageBox.warning(self, "Install failed", str(exc))
             return
-        self.status.setText(f"Installed: {path}")
+        self.status.setText(f"Installed {plugin.package_type.upper()}: {path}")
         self.refresh_plugins()
 
     def load_selected(self) -> None:
@@ -126,6 +127,10 @@ class RepositoryDialog(QDialog):
             self.installer.set_enabled(plugin.id, True)
         except (KeyError, OSError, ValueError) as exc:
             QMessageBox.warning(self, "Load failed", str(exc))
+            return
+        if plugin.package_type.lower() == "cs3":
+            self.status.setText(f"Installed {plugin.name}. CS3 compatibility runtime is required to load its catalog.")
+            QMessageBox.information(self, "CS3 compatibility", "This CloudStream extension is installed and verified, but VEYRA cannot execute Android DEX plugins yet. It will not be loaded as native Python code.")
             return
         self.status.setText(f"Loading {plugin.name}…")
         if callable(self.on_loaded):
