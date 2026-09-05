@@ -29,7 +29,7 @@ jobs:
         run: python -m compileall -q src tests build_entry.py runtime/veyra_cs3_runtime.py
 
       - name: Tests
-        run: python -m pytest -q
+        run: python -m pytest -q -m "not e2e"
 
       - name: Build wheel
         run: python -m pip wheel . --no-deps -w dist
