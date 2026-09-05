@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -12,20 +16,50 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install
-        run: python -m pip install --upgrade pip && pip install -e '.[test]'
+        run: python -m pip install --upgrade pip && pip install -e '.[test]' pyinstaller
+
       - name: Syntax check
-        run: python -m compileall -q src tests
+        run: python -m compileall -q src tests build_entry.py
+
       - name: Tests
         run: python -m pytest -q
+
       - name: Build wheel
         run: python -m pip wheel . --no-deps -w dist
+
+      - name: Build Windows EXE
+        run: >-
+          pyinstaller --noconfirm --clean --windowed --name VEYRA
+          --paths src --collect-all PySide6 build_entry.py
+
+      - name: Verify EXE
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'dist/VEYRA/VEYRA.exe')) {
+            Write-Error 'VEYRA.exe was not produced.'
+          }
+          Get-Item 'dist/VEYRA/VEYRA.exe' | Format-List FullName,Length
+
+      - name: Package Windows artifact
+        shell: pwsh
+        run: Compress-Archive -Path 'dist/VEYRA/*' -DestinationPath 'dist/VEYRA-Windows-x64.zip' -Force
+
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
           name: veyra-wheel
           path: dist/*.whl
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: veyra-windows-x64
+          path: dist/VEYRA-Windows-x64.zip
+          if-no-files-found: error
