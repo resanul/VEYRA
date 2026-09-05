@@ -5,7 +5,6 @@ from pathlib import Path
 
 from .history import PlaybackHistory
 from .models import MediaItem
-from .extensions.ui import RepositoryDialog
 
 
 def _fmt_ms(value: int) -> str:
@@ -18,10 +17,7 @@ def _fmt_ms(value: int) -> str:
 def main() -> int:
     try:
         from PySide6.QtCore import Qt, QUrl
-        from PySide6.QtWidgets import (
-            QApplication, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-            QMainWindow, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
-        )
+        from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
         from PySide6.QtMultimediaWidgets import QVideoWidget
     except ImportError as exc:
@@ -35,7 +31,6 @@ def main() -> int:
     window = QMainWindow()
     window.setWindowTitle("VEYRA — Universal Media Player")
     window.resize(1280, 760)
-
     player = QMediaPlayer(window)
     audio = QAudioOutput(window)
     video = QVideoWidget()
@@ -58,7 +53,6 @@ def main() -> int:
     speed.setRange(25, 400)
     speed.setValue(100)
     speed.setSuffix("%")
-
     library_list = QListWidget()
     library_list.setMinimumWidth(260)
     for record in history.recent():
@@ -111,6 +105,7 @@ def main() -> int:
             history.save_position(current.source, current.title, player.position(), player.duration())
 
     def show_extensions() -> None:
+        from .extensions.ui import RepositoryDialog
         RepositoryDialog(window).exec()
 
     open_btn = QPushButton("Open")
@@ -120,7 +115,6 @@ def main() -> int:
     stop_btn = QPushButton("Stop")
     fullscreen_btn = QPushButton("Fullscreen")
     extensions_btn = QPushButton("Extensions")
-
     open_btn.clicked.connect(open_media)
     play_btn.clicked.connect(toggle_playback)
     back_btn.clicked.connect(lambda: jump(-10_000))
@@ -135,7 +129,6 @@ def main() -> int:
     player.durationChanged.connect(on_duration)
     player.mediaStatusChanged.connect(lambda _: persist_position())
     library_list.itemDoubleClicked.connect(lambda item: load_source(item.data(Qt.ItemDataRole.UserRole)))
-
     controls = QHBoxLayout()
     for button in (open_btn, play_btn, back_btn, forward_btn, stop_btn, fullscreen_btn, extensions_btn):
         controls.addWidget(button)
