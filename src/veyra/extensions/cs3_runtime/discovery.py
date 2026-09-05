@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 
@@ -31,7 +32,6 @@ def candidate_paths() -> tuple[Path, ...]:
 
 def sys_prefix() -> str:
     # Kept separate to make discovery deterministic and easy to test.
-    import sys
     return sys.prefix
 
 
