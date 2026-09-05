@@ -79,6 +79,9 @@ def load_enabled_providers(root: Path | None = None) -> ProviderRegistry:
     enabled = {str(row["id"]): row for row in rows if isinstance(row, dict) and row.get("id") and row.get("enabled", True)}
     registry = ProviderRegistry()
     for extension_id, state in enabled.items():
+        if str(state.get("package_type", "veyra")).lower() == "cs3":
+            # CS3 is stored for the future compatibility runtime, never imported as Python.
+            continue
         package = root / extension_id
         manifest_path = package / "manifest.json"
         if not manifest_path.is_file():
