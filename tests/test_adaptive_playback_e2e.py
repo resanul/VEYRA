@@ -9,10 +9,10 @@ from veyra.providers.models import StreamSource
 pytestmark = pytest.mark.e2e
 
 # Public, clear test streams used by established player projects for
-# compatibility/regression testing. The DASH asset is MP4-only to avoid
-# codec-selection ambiguity in the Windows Qt/FFmpeg backend.
+# compatibility/regression testing. The DASH fixture is a small clear MP4
+# asset so the Windows Qt/FFmpeg backend is not exercising DRM or WebM.
 HLS_URL = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"
-DASH_URL = "https://storage.googleapis.com/shaka-demo-assets/sintel-mp4-only/dash.mpd"
+DASH_URL = "https://storage.googleapis.com/shaka-demo-assets/dig-the-uke-clear/dash.mpd"
 
 
 def _play_remote_adaptive_stream(
