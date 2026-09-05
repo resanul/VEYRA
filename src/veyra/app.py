@@ -7,6 +7,7 @@ from .history import PlaybackHistory
 from .models import MediaItem
 from .playback_tracks import TrackKind, format_track_label, make_track_info
 from .providers.stream_request import PlayRequest
+from .subtitles import SubtitleEngine
 
 
 VEYRA_VERSION = "0.3.2"
@@ -17,6 +18,14 @@ def _fmt_ms(value: int) -> str:
     hours, seconds = divmod(seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+
+
+class SubtitleOverlayLabel:
+    """Small adapter keeping subtitle overlay behavior isolated from player logic."""
+
+    def __init__(self, label) -> None:
+        self.label = label
+        self.label.setAlignment(label.Qt.AlignmentFlag.AlignHCenter | label.Qt.AlignmentFlag.AlignBottom) if hasattr(label, "Qt") else None
 
 
 def main() -> int:
@@ -64,18 +73,48 @@ def main() -> int:
     player.setVideoOutput(video)
     audio.setVolume(1.0)
     media_proxy = MediaStreamProxy()
+    subtitle_engine = SubtitleEngine()
     history = PlaybackHistory()
     current: MediaItem | None = None
     current_request: PlayRequest | None = None
+    current_external_subtitle: str | None = None
     registry = load_enabled_providers()
 
     catalog = CatalogView()
     details = DetailsView()
     player_page = QWidget()
     player_layout = QVBoxLayout(player_page)
+    video.setMinimumHeight(360)
     player_layout.addWidget(video, 1)
     player_status = QLabel("Select a title from an extension catalog to play it.")
     player_layout.addWidget(player_status)
+
+    # External subtitle rendering is intentionally independent from Qt's
+    # embedded subtitle tracks. This works for remote sources and local files.
+    subtitle_overlay = QLabel(video)
+    subtitle_overlay.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+    subtitle_overlay.setWordWrap(True)
+    subtitle_overlay.setStyleSheet(
+        "QLabel{color:white;background:rgba(0,0,0,150);padding:8px 16px;"
+        "font-size:20px;font-weight:600;border-radius:5px;}"
+    )
+    subtitle_overlay.setMargin(4)
+    subtitle_overlay.hide()
+    subtitle_overlay.raise_()
+
+    def resize_subtitle_overlay() -> None:
+        width = max(200, video.width() - 80)
+        height = min(130, max(50, video.height() // 4))
+        subtitle_overlay.setGeometry((video.width() - width) // 2, video.height() - height - 24, width, height)
+        subtitle_overlay.raise_()
+
+    original_video_resize = video.resizeEvent
+
+    def video_resize_event(event) -> None:
+        original_video_resize(event)
+        resize_subtitle_overlay()
+
+    video.resizeEvent = video_resize_event
 
     pages = QStackedWidget()
     pages.addWidget(catalog)
@@ -168,48 +207,82 @@ def main() -> int:
                         detail = f"{width}x{height}"
             except (AttributeError, TypeError, RuntimeError, ValueError):
                 pass
-        return title_text, language, codec if codec else detail
+        return title_text, language, codec, detail
+
+    def _load_external_subtitle(source: str) -> None:
+        nonlocal current_external_subtitle
+        try:
+            headers = current_request.source.headers if current_request else None
+            count = subtitle_engine.load(source, headers=headers)
+            if not count:
+                raise ValueError("no subtitle cues found")
+            current_external_subtitle = source
+            try:
+                player.setActiveSubtitleTrack(-1)
+            except (AttributeError, RuntimeError):
+                pass
+            subtitle_overlay.show()
+            player_status.setText(f"External subtitles: {Path(source).name or source} · {count} cues")
+            rebuild_track_menus()
+            update_subtitle(player.position())
+        except Exception as exc:
+            subtitle_engine.clear()
+            current_external_subtitle = None
+            subtitle_overlay.clear()
+            subtitle_overlay.hide()
+            player_status.setText(f"Subtitle error: {exc}")
+
+    def _clear_external_subtitle() -> None:
+        nonlocal current_external_subtitle
+        subtitle_engine.clear()
+        current_external_subtitle = None
+        subtitle_overlay.clear()
+        subtitle_overlay.hide()
+
+    def _load_subtitle_file() -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            window,
+            "Load subtitle",
+            str(Path.home()),
+            "Subtitles (*.srt *.vtt *.ass *.ssa);;All files (*.*)",
+        )
+        if path:
+            _load_external_subtitle(path)
 
     def _populate_track_menu(menu: QMenu, tracks, kind: TrackKind, active_index: int, setter) -> None:
         menu.clear()
         menu.setEnabled(bool(tracks) or kind is TrackKind.SUBTITLE)
         off = menu.addAction("Off")
         off.setCheckable(True)
-        off.setChecked(active_index < 0)
-        off.triggered.connect(lambda _checked, value=-1: setter(value))
-        if not tracks:
-            if kind is TrackKind.SUBTITLE:
-                note = menu.addAction("No embedded subtitles")
-                note.setEnabled(False)
-            else:
-                off.setEnabled(False)
-            return
-        menu.addSeparator()
-        for index, metadata in enumerate(tracks):
-            title_text, language, codec = _track_detail(metadata, kind)
-            detail = None
-            if kind is TrackKind.VIDEO:
-                try:
-                    resolution = metadata.value(QMediaMetaData.Key.Resolution)
-                    if resolution and hasattr(resolution, "width") and hasattr(resolution, "height"):
-                        width = int(resolution.width())
-                        height = int(resolution.height())
-                        if width and height:
-                            detail = f"{width}x{height}"
-                except (AttributeError, TypeError, RuntimeError, ValueError):
-                    pass
-            info = make_track_info(
-                kind,
-                index,
-                title=title_text,
-                language=language,
-                codec=codec,
-                detail=detail,
-            )
-            action = menu.addAction(format_track_label(info))
-            action.setCheckable(True)
-            action.setChecked(index == active_index)
-            action.triggered.connect(lambda _checked, value=index: setter(value))
+        off.setChecked(active_index < 0 and current_external_subtitle is None)
+        off.triggered.connect(lambda _checked, value=-1: (setter(value), _clear_external_subtitle()))
+        if tracks:
+            menu.addSeparator()
+            for index, metadata in enumerate(tracks):
+                title_text, language, codec, detail = _track_detail(metadata, kind)
+                info = make_track_info(kind, index, title=title_text, language=language, codec=codec, detail=detail)
+                action = menu.addAction(format_track_label(info))
+                action.setCheckable(True)
+                action.setChecked(index == active_index and current_external_subtitle is None)
+                action.triggered.connect(lambda _checked, value=index: (_clear_external_subtitle(), setter(value)))
+        elif kind is TrackKind.SUBTITLE:
+            note = menu.addAction("No embedded subtitles")
+            note.setEnabled(False)
+
+        if kind is TrackKind.SUBTITLE:
+            if current_request and current_request.source.subtitles:
+                menu.addSeparator()
+                external_label = menu.addAction("External subtitles")
+                external_label.setEnabled(False)
+                for index, source in enumerate(current_request.source.subtitles, start=1):
+                    name = Path(source.split("?", 1)[0]).name or f"Subtitle {index}"
+                    action = menu.addAction(f"{name} (external)")
+                    action.setCheckable(True)
+                    action.setChecked(source == current_external_subtitle)
+                    action.triggered.connect(lambda _checked, value=source: _load_external_subtitle(value))
+            menu.addSeparator()
+            load_action = menu.addAction("Load subtitle file…")
+            load_action.triggered.connect(_load_subtitle_file)
 
     def rebuild_track_menus() -> None:
         try:
@@ -222,6 +295,15 @@ def main() -> int:
             subtitle_menu.clear()
             tracks_btn.setEnabled(False)
 
+    def update_subtitle(position_ms: int) -> None:
+        if current_external_subtitle is None:
+            return
+        text = subtitle_engine.text_at(position_ms)
+        subtitle_overlay.setText(text)
+        subtitle_overlay.setVisible(bool(text))
+        if text:
+            subtitle_overlay.raise_()
+
     def load_source(request: PlayRequest | object) -> None:
         nonlocal current, current_request
         if isinstance(request, PlayRequest):
@@ -232,6 +314,7 @@ def main() -> int:
                 status.setText("Invalid playback request.")
                 return
             play_request = PlayRequest.from_source(request)
+        _clear_external_subtitle()
         current_request = play_request
         source = play_request.source
         source_url = source.url
@@ -257,6 +340,7 @@ def main() -> int:
         tracks_btn.setEnabled(True)
         stream_info_btn.setEnabled(True)
         pages.setCurrentWidget(player_page)
+        resize_subtitle_overlay()
         rebuild_track_menus()
 
     def open_media() -> None:
@@ -286,6 +370,7 @@ def main() -> int:
             f"Quality: {source.quality or 'auto'}",
             f"Format: {source.format or 'auto'}",
             f"Subtitle sources: {len(source.subtitles)}",
+            f"Active external subtitle: {current_external_subtitle or 'none'}",
             "",
             "Request headers:",
         ]
@@ -302,6 +387,7 @@ def main() -> int:
         if not seek.isSliderDown():
             seek.setValue(value)
         time_label.setText(f"{_fmt_ms(value)} / {_fmt_ms(player.duration())}")
+        update_subtitle(value)
 
     def on_duration(value: int) -> None:
         seek.setRange(0, max(0, value))
@@ -379,6 +465,7 @@ def main() -> int:
     tracks_btn.setEnabled(False)
     stream_info_btn.setEnabled(False)
     rebuild_track_menus()
+    resize_subtitle_overlay()
 
     if registry.all():
         load_extension()
