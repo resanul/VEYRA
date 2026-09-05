@@ -44,6 +44,23 @@ def _proxy_query_url(url: str) -> str:
     return quote(url, safe=":/?=$,-_.~")
 
 
+def _proxy_path_suffix(absolute_url: str) -> str:
+    """Return a safe media extension for the local proxy URL.
+
+    FFmpeg's HLS demuxer applies an allowed-extension check to child segment
+    URLs. A proxy route ending only in a random token therefore gets rejected
+    even when the upstream segment is a valid .ts/.m4s/etc. Preserve only the
+    final extension; the upstream URL itself remains in the query parameter.
+    """
+    name = urlsplit(absolute_url).path.rsplit("/", 1)[-1]
+    if "." not in name:
+        return ""
+    extension = name.rsplit(".", 1)[-1]
+    if not extension or len(extension) > 8 or not extension.isalnum():
+        return ""
+    return f".{extension}"
+
+
 class _ProxyHandler(BaseHTTPRequestHandler):
     server: "_MediaProxyServer"
 
@@ -58,8 +75,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
     def _handle(self, *, head_only: bool) -> None:
         parsed = urlsplit(self.path)
-        parts = parsed.path.split("/", 3)
-        if len(parts) != 3 or parts[1] != "stream":
+        parts = parsed.path.split("/")
+        if len(parts) not in {3, 4} or parts[1] != "stream":
             self.send_error(404, "Unknown media proxy route")
             return
         token = parts[2]
@@ -157,7 +174,9 @@ class _MediaProxyServer(ThreadingHTTPServer):
             self.sessions.pop(token, None)
 
     def rewrite_url(self, token: str, absolute_url: str) -> str:
-        return f"http://127.0.0.1:{self.server_port}/stream/{token}?url={_proxy_query_url(absolute_url)}"
+        suffix = _proxy_path_suffix(absolute_url)
+        media_path = f"/stream/{token}/media{suffix}"
+        return f"http://127.0.0.1:{self.server_port}{media_path}?url={_proxy_query_url(absolute_url)}"
 
     def rewrite_manifest(self, base_url: str, body: bytes, token: str) -> bytes:
         text = body.decode("utf-8", errors="replace")
