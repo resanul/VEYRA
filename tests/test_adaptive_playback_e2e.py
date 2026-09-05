@@ -15,12 +15,16 @@ HLS_URL = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipb
 DASH_URL = "https://storage.googleapis.com/shaka-demo-assets/sintel-mp4-only/dash.mpd"
 
 
-def _play_remote_adaptive_stream(url: str) -> tuple[bool, str | None, int]:
+def _play_remote_adaptive_stream(
+    url: str,
+    *,
+    through_proxy: bool = True,
+) -> tuple[bool, str | None, int]:
     from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer, QUrl
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
     QCoreApplication.instance() or QCoreApplication([])
-    proxy = MediaStreamProxy()
+    proxy = MediaStreamProxy() if through_proxy else None
     player = QMediaPlayer()
     audio = QAudioOutput()
     audio.setVolume(0.0)
@@ -67,8 +71,11 @@ def _play_remote_adaptive_stream(url: str) -> tuple[bool, str | None, int]:
                 "Referer": "https://provider.example/",
             },
         )
-        play_url = proxy.prepare(source)
-        assert play_url != url
+        if proxy is not None:
+            play_url = proxy.prepare(source)
+            assert play_url != url
+        else:
+            play_url = source.url
         player.setSource(QUrl(play_url))
         player.play()
         loop.exec()
@@ -80,7 +87,8 @@ def _play_remote_adaptive_stream(url: str) -> tuple[bool, str | None, int]:
         )
     finally:
         player.stop()
-        proxy.close()
+        if proxy is not None:
+            proxy.close()
 
 
 def test_qmediaplayer_plays_real_hls_through_proxy() -> None:
@@ -88,6 +96,11 @@ def test_qmediaplayer_plays_real_hls_through_proxy() -> None:
     assert ok, f"HLS playback failed: {error or 'unknown error'}; duration={duration}ms"
 
 
+def test_qmediaplayer_plays_real_dash_direct() -> None:
+    ok, error, duration = _play_remote_adaptive_stream(DASH_URL, through_proxy=False)
+    assert ok, f"Direct DASH playback failed: {error or 'unknown error'}; duration={duration}ms"
+
+
 def test_qmediaplayer_plays_real_dash_through_proxy() -> None:
     ok, error, duration = _play_remote_adaptive_stream(DASH_URL)
-    assert ok, f"DASH playback failed: {error or 'unknown error'}; duration={duration}ms"
+    assert ok, f"DASH playback through proxy failed: {error or 'unknown error'}; duration={duration}ms"
