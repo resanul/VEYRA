@@ -21,6 +21,34 @@ class SubtitleCue:
             raise ValueError("invalid subtitle cue timing")
 
 
+@dataclass(frozen=True, slots=True)
+class SubtitleStyle:
+    """Presentation settings for the external subtitle overlay."""
+
+    font_size: int = 20
+    bottom_margin: int = 24
+    background_opacity: int = 150
+    bold: bool = True
+
+    def __post_init__(self) -> None:
+        if not 10 <= int(self.font_size) <= 64:
+            raise ValueError("font_size must be between 10 and 64")
+        if not 0 <= int(self.bottom_margin) <= 240:
+            raise ValueError("bottom_margin must be between 0 and 240")
+        if not 0 <= int(self.background_opacity) <= 255:
+            raise ValueError("background_opacity must be between 0 and 255")
+
+    def with_changes(self, **changes: object) -> "SubtitleStyle":
+        values = {
+            "font_size": self.font_size,
+            "bottom_margin": self.bottom_margin,
+            "background_opacity": self.background_opacity,
+            "bold": self.bold,
+        }
+        values.update(changes)
+        return SubtitleStyle(**values)
+
+
 _TAG_RE = re.compile(r"<[^>]+>")
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
 
@@ -241,6 +269,7 @@ __all__ = [
     "NetworkRequestError",
     "SubtitleCue",
     "SubtitleEngine",
+    "SubtitleStyle",
     "parse_ass",
     "parse_ass_timestamp",
     "parse_subtitles",
