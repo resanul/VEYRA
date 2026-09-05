@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from veyra.providers.models import SearchResult, StreamSource
+from veyra.providers.registry import ProviderRegistry
 
 
 _RUNNER = r'''
@@ -59,3 +60,28 @@ class IsolatedProvider:
 
     def streams(self, item: SearchResult):
         return [StreamSource(**row) for row in self._call("streams", {"item": asdict(item)})]
+
+
+def load_enabled_providers(root: Path | None = None) -> ProviderRegistry:
+    """Build a registry from installed and enabled native extensions."""
+    root = root or (Path.home() / "AppData" / "Local" / "VEYRA" / "extensions")
+    state_path = root.parent / "installed_extensions.json"
+    try:
+        rows = json.loads(state_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        rows = []
+    enabled = {str(row["id"]): row for row in rows if isinstance(row, dict) and row.get("id") and row.get("enabled", True)}
+    registry = ProviderRegistry()
+    for extension_id, state in enabled.items():
+        package = root / extension_id
+        manifest_path = package / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            entry = package / str(manifest.get("entry_point", "provider.py"))
+            if entry.is_file():
+                registry.register(IsolatedProvider(extension_id, str(manifest.get("name", state.get("name", extension_id))), entry))
+        except (OSError, ValueError, TypeError):
+            continue
+    return registry
