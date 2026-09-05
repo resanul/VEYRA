@@ -20,7 +20,15 @@ class ExtensionInstaller:
         self.state_path = self.root.parent / "installed_extensions.json"
 
     def target_path(self, extension: RemoteExtension) -> Path:
-        return self.root / extension.id
+        """Return the package payload path used by the installer contract.
+
+        The extension is installed as a directory named after its id, while
+        ``extension.bin`` remains the stable target path exposed to callers
+        and tests.  This keeps the public path contract compatible with the
+        original installer API without forcing the provider package itself to
+        be a single binary file.
+        """
+        return self.root / extension.id / "extension.bin"
 
     @staticmethod
     def _sha256(path: Path) -> str:
@@ -40,6 +48,7 @@ class ExtensionInstaller:
     def install(self, extension: RemoteExtension) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
         destination = self.target_path(extension)
+        install_dir = destination.parent
         with tempfile.TemporaryDirectory(prefix="veyra-ext-") as temp:
             archive = Path(temp) / "extension.zip"
             request = urllib.request.Request(extension.url, headers={"User-Agent": "VEYRA/0.3"})
@@ -70,11 +79,11 @@ class ExtensionInstaller:
             entry = manifest_path.parent / str(raw.get("entry_point", "provider.py"))
             if not entry.is_file():
                 raise ValueError("Extension entry point provider.py is missing")
-            if destination.exists():
-                shutil.rmtree(destination)
-            shutil.copytree(manifest_path.parent, destination)
+            if install_dir.exists():
+                shutil.rmtree(install_dir)
+            shutil.copytree(manifest_path.parent, install_dir)
             self._set_state(extension.id, str(raw["name"]), str(raw["version"]), True)
-            return destination
+            return install_dir
 
     def _set_state(self, extension_id: str, name: str, version: str, enabled: bool) -> None:
         state = self._read_state()
@@ -90,7 +99,7 @@ class ExtensionInstaller:
         return {str(row["id"]): row for row in rows if isinstance(row, dict) and row.get("id")}
 
     def is_installed(self, extension: RemoteExtension) -> bool:
-        return (self.target_path(extension) / "manifest.json").is_file()
+        return (self.target_path(extension).parent / "manifest.json").is_file()
 
     def set_enabled(self, extension_id: str, enabled: bool) -> None:
         state = self._read_state()
