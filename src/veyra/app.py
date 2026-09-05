@@ -8,7 +8,7 @@ from .models import MediaItem
 from .providers.stream_request import PlayRequest
 
 
-VEYRA_VERSION = "0.3.1"
+VEYRA_VERSION = "0.3.2"
 
 
 def _fmt_ms(value: int) -> str:
@@ -26,6 +26,7 @@ def main() -> int:
         from PySide6.QtMultimediaWidgets import QVideoWidget
         from .extensions.host import load_enabled_providers
         from .providers.catalog_view import CatalogView
+        from .providers.details_view import DetailsView
     except ImportError as exc:
         print("VEYRA requires PySide6. Install with: pip install -e '.[test]'", file=sys.stderr)
         print(f"Import error: {exc}", file=sys.stderr)
@@ -51,6 +52,7 @@ def main() -> int:
     registry = load_enabled_providers()
 
     catalog = CatalogView()
+    details = DetailsView()
     player_page = QWidget()
     player_layout = QVBoxLayout(player_page)
     player_layout.addWidget(video, 1)
@@ -59,6 +61,7 @@ def main() -> int:
 
     pages = QStackedWidget()
     pages.addWidget(catalog)
+    pages.addWidget(details)
     pages.addWidget(player_page)
 
     header = QHBoxLayout()
@@ -124,23 +127,23 @@ def main() -> int:
             play_request = PlayRequest.from_source(request)
         current_request = play_request
         source = play_request.source.url
-        title_text = play_request.title or play_request.item.title if play_request.item else play_request.title
+        title_text = (play_request.title or play_request.item.title) if play_request.item else play_request.title
         current = MediaItem(id=source, title=title_text or Path(source).name or source, source=source, media_type=MediaItem.from_source(source).media_type)
         player.setSource(QUrl.fromUserInput(source) if source.startswith(("http://", "https://")) else QUrl.fromLocalFile(source))
         record = history.get(source)
         player.play()
         if record and record.position_ms > 5000:
             player.setPosition(record.position_ms)
-        details = [f"Playing: {current.title}"]
+        details_text = [f"Playing: {current.title}"]
         if play_request.source.quality:
-            details.append(play_request.source.quality)
+            details_text.append(play_request.source.quality)
         if play_request.source.format:
-            details.append(play_request.source.format.upper())
+            details_text.append(play_request.source.format.upper())
         if play_request.headers:
-            details.append(f"{len(play_request.headers)} headers")
+            details_text.append(f"{len(play_request.headers)} headers")
         if play_request.subtitles:
-            details.append(f"{len(play_request.subtitles)} subtitle(s)")
-        player_status.setText(" · ".join(details))
+            details_text.append(f"{len(play_request.subtitles)} subtitle(s)")
+        player_status.setText(" · ".join(details_text))
         pages.setCurrentWidget(player_page)
 
     def open_media() -> None:
@@ -173,6 +176,13 @@ def main() -> int:
         if current is not None:
             history.save_position(current.source, current.title, player.position(), player.duration())
 
+    def show_details(item) -> None:
+        if catalog.provider is None:
+            return
+        details.show_item(catalog.provider, item)
+        pages.setCurrentWidget(details)
+        status.setText(f"Details: {item.title}")
+
     def load_extension(_plugin=None) -> None:
         nonlocal registry
         registry = load_enabled_providers()
@@ -182,15 +192,20 @@ def main() -> int:
                 status.setText(f"{_plugin.name} could not be loaded by the active provider runtime.")
                 return
             catalog.set_provider(provider)
+            details.provider = provider
             status.setText(f"Loaded extension: {provider.name}")
             pages.setCurrentWidget(catalog)
         elif registry.all():
             provider = registry.all()[0]
             catalog.set_provider(provider)
+            details.provider = provider
             status.setText(f"Loaded extension: {provider.name}")
             pages.setCurrentWidget(catalog)
 
+    catalog.details_requested.connect(show_details)
     catalog.play_requested.connect(load_source)
+    details.play_requested.connect(load_source)
+    details.back_requested.connect(lambda: pages.setCurrentWidget(catalog))
 
     def show_extensions() -> None:
         from .extensions.ui import RepositoryDialog
