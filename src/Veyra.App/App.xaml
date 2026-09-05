@@ -1,0 +1,9 @@
+<Application x:Class="Veyra.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources>
+    <SolidColorBrush x:Key="VeyraBackground" Color="#0B0C10" />
+    <SolidColorBrush x:Key="VeyraPanel" Color="#13151B" />
+    <SolidColorBrush x:Key="VeyraAccent" Color="#8B5CF6" />
+  </Application.Resources>
+</Application>
