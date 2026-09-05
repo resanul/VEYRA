@@ -27,6 +27,7 @@ def main() -> int:
         from .extensions.host import load_enabled_providers
         from .providers.catalog_view import CatalogView
         from .providers.details_view import DetailsView
+        from .providers.media_proxy import MediaStreamProxy
     except ImportError as exc:
         print("VEYRA requires PySide6. Install with: pip install -e '.[test]'", file=sys.stderr)
         print(f"Import error: {exc}", file=sys.stderr)
@@ -46,6 +47,7 @@ def main() -> int:
     player.setAudioOutput(audio)
     player.setVideoOutput(video)
     audio.setVolume(1.0)
+    media_proxy = MediaStreamProxy()
     history = PlaybackHistory()
     current: MediaItem | None = None
     current_request: PlayRequest | None = None
@@ -126,23 +128,26 @@ def main() -> int:
                 return
             play_request = PlayRequest.from_source(request)
         current_request = play_request
-        source = play_request.source.url
+        source = play_request.source
+        source_url = source.url
+        play_url = media_proxy.prepare(source)
         title_text = (play_request.title or play_request.item.title) if play_request.item else play_request.title
-        current = MediaItem(id=source, title=title_text or Path(source).name or source, source=source, media_type=MediaItem.from_source(source).media_type)
-        player.setSource(QUrl.fromUserInput(source) if source.startswith(("http://", "https://")) else QUrl.fromLocalFile(source))
-        record = history.get(source)
+        current = MediaItem(id=source_url, title=title_text or Path(source_url).name or source_url, source=source_url, media_type=MediaItem.from_source(source_url).media_type)
+        player.setSource(QUrl.fromUserInput(play_url) if play_url.startswith(("http://", "https://")) else QUrl.fromLocalFile(play_url))
+        record = history.get(source_url)
         player.play()
         if record and record.position_ms > 5000:
             player.setPosition(record.position_ms)
         details_text = [f"Playing: {current.title}"]
-        if play_request.source.quality:
-            details_text.append(play_request.source.quality)
-        if play_request.source.format:
-            details_text.append(play_request.source.format.upper())
-        if play_request.headers:
-            details_text.append(f"{len(play_request.headers)} headers")
-        if play_request.subtitles:
-            details_text.append(f"{len(play_request.subtitles)} subtitle(s)")
+        if source.quality:
+            details_text.append(source.quality)
+        if source.format:
+            details_text.append(source.format.upper())
+        if source.headers:
+            details_text.append(f"{len(source.headers)} request headers")
+            details_text.append("network proxy")
+        if source.subtitles:
+            details_text.append(f"{len(source.subtitles)} subtitle(s)")
         player_status.setText(" · ".join(details_text))
         pages.setCurrentWidget(player_page)
 
@@ -225,6 +230,8 @@ def main() -> int:
     player.positionChanged.connect(on_position)
     player.durationChanged.connect(on_duration)
     player.mediaStatusChanged.connect(lambda _: persist_position())
+    player.errorOccurred.connect(lambda _error, message: status.setText(f"Playback error: {message}"))
+    app.aboutToQuit.connect(media_proxy.close)
 
     if registry.all():
         load_extension()
