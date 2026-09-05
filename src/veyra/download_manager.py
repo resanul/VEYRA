@@ -45,12 +45,7 @@ class DownloadTask:
 
 
 class DownloadManager:
-    """Persistent, resumable download queue for VEYRA.
-
-    Downloads are written to a temporary ``.part`` file and atomically renamed
-    only after the transfer completes. SQLite stores queue state so an
-    application restart can safely resume interrupted work.
-    """
+    """Persistent, resumable download queue for VEYRA."""
 
     CHUNK_SIZE = 256 * 1024
     DEFAULT_TIMEOUT = 30.0
@@ -112,18 +107,14 @@ class DownloadManager:
         *,
         filename: str | None = None,
         destination: Path | None = None,
-        headers: dict[str, str] | None = None,
     ) -> DownloadTask:
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("downloads require an HTTP(S) URL")
         name = self._safe_filename(filename or self.filename_from_url(url))
         directory = Path(destination or self.download_dir)
         directory.mkdir(parents=True, exist_ok=True)
-        target = directory / name
         task_id = uuid.uuid4().hex
         now = time.time()
-        # Request headers are deliberately not persisted: provider credentials
-        # should remain in the caller's request context rather than in SQLite.
         with self._connect() as db:
             db.execute(
                 "INSERT INTO downloads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -159,10 +150,8 @@ class DownloadManager:
             thread = self._threads.get(task_id)
             if thread and thread.is_alive():
                 return
-            stop = threading.Event()
-            pause = threading.Event()
-            self._stop_events[task_id] = stop
-            self._pause_events[task_id] = pause
+            self._stop_events[task_id] = threading.Event()
+            self._pause_events[task_id] = threading.Event()
             self._update(task_id, status=DownloadStatus.DOWNLOADING, error=None)
             thread = threading.Thread(target=self._worker, args=(task_id,), name=f"veyra-download-{task_id[:8]}", daemon=True)
             self._threads[task_id] = thread
@@ -183,9 +172,6 @@ class DownloadManager:
             task = self.get(task_id)
             if task is None:
                 raise KeyError(task_id)
-            event = self._pause_events.get(task_id)
-            if event is not None:
-                event.clear()
             if task.status in {DownloadStatus.PAUSED, DownloadStatus.FAILED, DownloadStatus.QUEUED}:
                 self.start(task_id)
 
@@ -239,7 +225,7 @@ class DownloadManager:
         target = Path(task.destination) / task.filename
         part = self._part_path(task)
         existing = part.stat().st_size if part.exists() else 0
-        headers: dict[str, str] = {"User-Agent": "VEYRA/0.3.2", "Accept": "*/*"}
+        headers = {"User-Agent": "VEYRA/0.3.2", "Accept": "*/*"}
         request = Request(task.url, headers=headers, method="GET")
         if existing:
             request.add_header("Range", f"bytes={existing}-")
@@ -271,10 +257,7 @@ class DownloadManager:
             hasher = hashlib.sha256()
             if existing:
                 with part.open("rb") as previous:
-                    while True:
-                        chunk = previous.read(self.CHUNK_SIZE)
-                        if not chunk:
-                            break
+                    for chunk in iter(lambda: previous.read(self.CHUNK_SIZE), b""):
                         hasher.update(chunk)
             mode = "ab" if resumed else "wb"
             downloaded = existing
@@ -294,7 +277,6 @@ class DownloadManager:
                     hasher.update(chunk)
                     downloaded += len(chunk)
                     self._update(task_id, downloaded_bytes=downloaded, total_bytes=total)
-            output.flush() if hasattr(output, "flush") else None
 
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(part, target)
