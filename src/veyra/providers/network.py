@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from http.cookiejar import CookieJar
 from typing import Mapping
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, build_opener
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 from .models import StreamSource
 from .stream_resolver import ManifestInfo, StreamResolver
@@ -63,7 +63,7 @@ class NetworkClient:
     def __init__(self, *, options: RequestOptions | None = None) -> None:
         self.options = options or RequestOptions()
         self.cookie_jar = CookieJar()
-        self._opener = build_opener()
+        self._opener = build_opener(HTTPCookieProcessor(self.cookie_jar))
 
     @staticmethod
     def _cookie_header(cookies: Mapping[str, str] | None) -> str | None:
@@ -144,11 +144,6 @@ class NetworkClient:
             timeout=timeout,
             max_bytes=max_bytes,
         )
-        request_headers = dict(response.headers)
-        if headers:
-            request_headers.update(dict(headers))
-        if referer and "Referer" not in request_headers:
-            request_headers["Referer"] = referer
         manifest = StreamResolver.parse_manifest(
             response.url,
             response.text,
