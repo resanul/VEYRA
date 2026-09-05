@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from pathlib import Path
+import hashlib
+from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import QSettings
 
@@ -55,10 +56,11 @@ class PlaybackStateStore:
 
     def load_source(self, source: str) -> PlaybackState:
         key = self._source_key(source)
+        preferences = self.load_preferences()
         return PlaybackState(
-            playback_rate=self.load_preferences().playback_rate,
-            volume=self.load_preferences().volume,
-            muted=self.load_preferences().muted,
+            playback_rate=preferences.playback_rate,
+            volume=preferences.volume,
+            muted=preferences.muted,
             audio_track=self._int(f"tracks/{key}/audio", -1),
             video_track=self._int(f"tracks/{key}/video", -1),
             subtitle_track=self._int(f"tracks/{key}/subtitle", -1),
@@ -77,9 +79,22 @@ class PlaybackStateStore:
             self.settings.remove(f"tracks/{key}/external_subtitle")
         self.save_preferences(state)
 
+    @staticmethod
+    def _canonical_source(source: str) -> str:
+        """Unwrap VEYRA's localhost media proxy so random proxy tokens do not break persistence."""
+        try:
+            parsed = urlparse(source)
+            if parsed.hostname in {"127.0.0.1", "localhost"}:
+                upstream = parse_qs(parsed.query).get("url", [None])[0]
+                if upstream:
+                    return upstream
+        except ValueError:
+            pass
+        return source
+
     def _source_key(self, source: str) -> str:
-        import hashlib
-        return hashlib.sha256(source.encode("utf-8")).hexdigest()[:24]
+        canonical = self._canonical_source(source)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
 
     def _optional(self, key: str) -> str | None:
         value = self.settings.value(key, None)
