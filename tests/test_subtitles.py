@@ -25,7 +25,7 @@ First cue
 Second cue
 """
 
-ASS = """[Script Info]
+ASS = r"""[Script Info]
 Title: Demo
 
 [Events]
