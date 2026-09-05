@@ -1,10 +1,23 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget
+from urllib.request import urlopen
 
-from .models import SearchResult
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .models import SearchResult, StreamSource
 
 
 class CatalogView(QWidget):
@@ -41,6 +54,7 @@ class CatalogView(QWidget):
 
     def set_provider(self, provider) -> None:
         self.provider = provider
+        self.search.clear()
         self.heading.setText(f"{provider.name} · Home")
         self.load_home()
 
@@ -76,25 +90,63 @@ class CatalogView(QWidget):
             card = QListWidgetItem(result.title)
             card.setToolTip(f"{result.title}\n{result.year or ''} · {result.kind}")
             card.setData(Qt.ItemDataRole.UserRole, result)
+            card.setSizeHint(self.results.iconSize())
             if result.poster:
                 try:
-                    from urllib.request import urlopen
                     data = urlopen(result.poster, timeout=5).read()
                     pixmap = QPixmap()
                     pixmap.loadFromData(data)
                     if not pixmap.isNull():
-                        card.setIcon(pixmap.scaled(140, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                except Exception:
+                        scaled = pixmap.scaled(
+                            140,
+                            200,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                        card.setIcon(QIcon(scaled))
+                except (OSError, ValueError, TypeError):
                     pass
             self.results.addItem(card)
 
     def open_item(self, item: QListWidgetItem) -> None:
         result = item.data(Qt.ItemDataRole.UserRole)
-        if result is None or self.provider is None:
+        if not isinstance(result, SearchResult) or self.provider is None:
             return
         try:
             streams = list(self.provider.streams(result))
         except (OSError, RuntimeError, ValueError, TypeError):
             streams = []
-        if streams:
+        if not streams:
+            self._show_error("No playable stream was returned for this title.")
+            return
+        if len(streams) == 1:
             self.play_requested.emit(streams[0].url)
+            return
+        self._choose_stream(result, streams)
+
+    def _choose_stream(self, result: SearchResult, streams: list[StreamSource]) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Choose stream · {result.title}")
+        dialog.resize(520, 360)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(f"{result.title}\nSelect a quality/source:"))
+        choices = QListWidget()
+        for index, stream in enumerate(streams):
+            label = stream.quality or "Auto"
+            if stream.format:
+                label += f" · {stream.format.upper()}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, index)
+            choices.addItem(item)
+        choices.setCurrentRow(0)
+        layout.addWidget(choices, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted and choices.currentItem() is not None:
+            index = choices.currentItem().data(Qt.ItemDataRole.UserRole)
+            self.play_requested.emit(streams[int(index)].url)
+
+    def _show_error(self, message: str) -> None:
+        self.heading.setText(message)
