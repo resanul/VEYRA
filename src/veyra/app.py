@@ -7,6 +7,9 @@ from .history import PlaybackHistory
 from .models import MediaItem
 
 
+VEYRA_VERSION = "0.1.0"
+
+
 def _fmt_ms(value: int) -> str:
     seconds = max(0, value // 1000)
     hours, seconds = divmod(seconds, 3600)
@@ -27,9 +30,9 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("VEYRA")
-    app.setApplicationVersion("0.2.0")
+    app.setApplicationVersion(VEYRA_VERSION)
     window = QMainWindow()
-    window.setWindowTitle("VEYRA — Universal Media Player")
+    window.setWindowTitle(f"VEYRA {VEYRA_VERSION} — Universal Media Player")
     window.resize(1280, 760)
     player = QMediaPlayer(window)
     audio = QAudioOutput(window)
@@ -40,7 +43,7 @@ def main() -> int:
     history = PlaybackHistory()
     current: MediaItem | None = None
 
-    title = QLabel("VEYRA · Universal Media Player")
+    title = QLabel(f"VEYRA {VEYRA_VERSION} · Universal Media Player")
     title.setStyleSheet("font-size: 22px; font-weight: 700; padding: 10px;")
     status = QLabel("Open a media file or stream URL to begin.")
     time_label = QLabel("00:00 / 00:00")
