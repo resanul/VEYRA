@@ -18,6 +18,11 @@ class _Handler(BaseHTTPRequestHandler):
                 b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720\nvideo/720.m3u8\n"
             )
             return
+        if self.path == "/set-cookie":
+            self.send_response(200)
+            self.send_header("Set-Cookie", "session=jar-value; Path=/")
+            self.end_headers()
+            return
         if self.path == "/echo":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -57,11 +62,23 @@ def test_headers_referer_and_cookie_are_forwarded() -> None:
         server.shutdown()
 
 
+def test_cookie_jar_persists_set_cookie_between_requests() -> None:
+    server, _ = _server()
+    try:
+        client = NetworkClient()
+        base = f"http://127.0.0.1:{server.server_port}"
+        client.get(f"{base}/set-cookie")
+        response = client.get(f"{base}/echo")
+        assert "session=jar-value" in response.text
+    finally:
+        server.shutdown()
+
+
 def test_fetch_manifest_preserves_request_headers_on_resolved_source() -> None:
     server, _ = _server()
     try:
         url = f"http://127.0.0.1:{server.server_port}/manifest"
-        _, manifest = NetworkClient(options=RequestOptions(referer="https://provider.example/")) .fetch_manifest(url)
+        _, manifest = NetworkClient(options=RequestOptions(referer="https://provider.example/")).fetch_manifest(url)
         assert manifest.format == "hls"
         assert manifest.sources[0].url.endswith("/video/720.m3u8")
         assert manifest.sources[0].headers["Referer"] == "https://provider.example/"
