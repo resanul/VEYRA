@@ -7,6 +7,7 @@ from .history import PlaybackHistory
 from .models import MediaItem
 from .playback_tracks import TrackKind, format_track_label, make_track_info
 from .providers.stream_request import PlayRequest
+from .subtitle_controls import install_subtitle_controls
 from .subtitles import SubtitleEngine
 
 
@@ -104,7 +105,7 @@ def main() -> int:
 
     def resize_subtitle_overlay() -> None:
         width = max(200, video.width() - 80)
-        height = min(130, max(50, video.height() // 4))
+        height = min(160, max(50, video.height() // 4))
         subtitle_overlay.setGeometry((video.width() - width) // 2, video.height() - height - 24, width, height)
         subtitle_overlay.raise_()
 
@@ -179,6 +180,7 @@ def main() -> int:
     video_menu = tracks_menu.addMenu("Video")
     subtitle_menu = tracks_menu.addMenu("Subtitles")
     tracks_btn.setMenu(tracks_menu)
+    install_subtitle_controls(window, video, subtitle_overlay, subtitle_engine, subtitle_menu)
 
     def _meta_text(metadata, key) -> str | None:
         try:
@@ -191,7 +193,7 @@ def main() -> int:
         text = str(value).strip()
         return text if text and text.lower() not in {"unknown", "unspecified", "none"} else None
 
-    def _track_detail(metadata, kind: TrackKind) -> tuple[str | None, str | None, str | None]:
+    def _track_detail(metadata, kind: TrackKind) -> tuple[str | None, str | None, str | None, str | None]:
         language = _meta_text(metadata, QMediaMetaData.Key.Language)
         title_text = _meta_text(metadata, QMediaMetaData.Key.Title)
         codec_key = QMediaMetaData.Key.AudioCodec if kind is TrackKind.AUDIO else QMediaMetaData.Key.VideoCodec
@@ -371,6 +373,7 @@ def main() -> int:
             f"Format: {source.format or 'auto'}",
             f"Subtitle sources: {len(source.subtitles)}",
             f"Active external subtitle: {current_external_subtitle or 'none'}",
+            f"Subtitle delay: {subtitle_engine.offset_ms / 1000:+.1f} s",
             "",
             "Request headers:",
         ]
