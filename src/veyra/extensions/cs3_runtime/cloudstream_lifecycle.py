@@ -10,13 +10,12 @@ from veyra.extensions.cs3_api import (
     search_result_from_cloudstream,
     stream_source_from_cloudstream,
 )
+from veyra.extensions.cs3_runtime.extractor_bridge import ExtractorApiBridge, ExtractorRegistry
 from veyra.providers.models import SearchResult, StreamSource
 
 
 @dataclass(frozen=True, slots=True)
 class CloudStreamHomePage:
-    """Portable equivalent of a CloudStream HomePageList response."""
-
     name: str
     items: tuple[SearchResult, ...] = ()
     has_next: bool = False
@@ -25,8 +24,6 @@ class CloudStreamHomePage:
 
 @dataclass(frozen=True, slots=True)
 class CloudStreamLoadResponse:
-    """Portable equivalent of a CloudStream LoadResponse."""
-
     item: SearchResult
     streams: tuple[StreamSource, ...] = ()
     episodes: tuple[SearchResult, ...] = ()
@@ -45,18 +42,15 @@ class CloudStreamLifecycleResponse:
 
 
 class CloudStreamLifecycleAdapter:
-    """Clean-room adapter for the MainAPI/ExtractorApi lifecycle.
+    """Clean-room adapter for MainAPI and ExtractorApi lifecycle semantics."""
 
-    The adapter only consumes/produces JSON-compatible CloudStream-shaped
-    payloads. It deliberately does not load Android DEX or copy CloudStream
-    implementation code. A CS3 execution runtime can supply ``request``.
-    """
-
-    METHODS = ("providers", "home", "search", "load", "loadLinks", "streams")
+    METHODS = ("providers", "home", "search", "load", "loadLinks", "streams", "extract")
 
     def __init__(self, request: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
         self._request = request
         self._bridge = CloudStreamApiBridge()
+        self.extractors = ExtractorRegistry()
+        self.extractor_api = ExtractorApiBridge(request, self.extractors)
 
     @staticmethod
     def _items(payload: Mapping[str, Any], key: str = "items") -> tuple[SearchResult, ...]:
@@ -74,7 +68,7 @@ class CloudStreamLifecycleAdapter:
                 providers.append(self._bridge.register_main_api(value))
         for value in payload.get("extractors", ()):
             if isinstance(value, dict):
-                extractors.append(self._bridge.register_extractor_api(value))
+                extractors.append(self.extractor_api.register(value))
         return CloudStreamLifecycleResponse(tuple(providers), tuple(extractors), error=payload.get("error"))
 
     def get_main_page(self, page: int = 1) -> CloudStreamLifecycleResponse:
@@ -110,39 +104,25 @@ class CloudStreamLifecycleAdapter:
             return CloudStreamLifecycleResponse(error=payload.get("error") or "load response did not contain an item")
         item = search_result_from_cloudstream(item_payload)
         episodes = self._items(payload, "episodes")
-        streams = tuple(
-            stream_source_from_cloudstream(value)
-            for value in payload.get("streams", ())
-            if isinstance(value, dict)
-        )
+        streams = tuple(stream_source_from_cloudstream(value) for value in payload.get("streams", ()) if isinstance(value, dict))
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         loaded = CloudStreamLoadResponse(item=item, streams=streams, episodes=episodes, metadata=metadata)
         return CloudStreamLifecycleResponse(load=loaded, streams=streams, error=payload.get("error"))
 
     def load_links(self, url: str, *, referer: str | None = None, data: str | None = None) -> CloudStreamLifecycleResponse:
         payload = self._request("loadLinks", {"url": url, "referer": referer, "data": data})
-        streams = tuple(
-            stream_source_from_cloudstream(value)
-            for value in payload.get("streams", ())
-            if isinstance(value, dict)
-        )
+        streams = tuple(stream_source_from_cloudstream(value) for value in payload.get("streams", ()) if isinstance(value, dict))
         return CloudStreamLifecycleResponse(streams=streams, error=payload.get("error"))
+
+    def extract(self, url: str, *, extractor: str | None = None, referer: str | None = None,
+                data: str | None = None, headers: Mapping[str, str] | None = None) -> CloudStreamLifecycleResponse:
+        streams = self.extractor_api.extract(url, extractor=extractor, referer=referer, data=data, headers=headers)
+        return CloudStreamLifecycleResponse(streams=streams)
 
     def streams(self, item: SearchResult) -> CloudStreamLifecycleResponse:
         payload = self._request("streams", {
-            "item": {
-                "id": item.id,
-                "title": item.title,
-                "url": item.url,
-                "kind": item.kind,
-                "year": item.year,
-                "poster": item.poster,
-                "metadata": dict(item.metadata),
-            }
+            "item": {"id": item.id, "title": item.title, "url": item.url, "kind": item.kind,
+                     "year": item.year, "poster": item.poster, "metadata": dict(item.metadata)}
         })
-        streams = tuple(
-            stream_source_from_cloudstream(value)
-            for value in payload.get("streams", ())
-            if isinstance(value, dict)
-        )
+        streams = tuple(stream_source_from_cloudstream(value) for value in payload.get("streams", ()) if isinstance(value, dict))
         return CloudStreamLifecycleResponse(streams=streams, error=payload.get("error"))
