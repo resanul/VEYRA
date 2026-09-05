@@ -23,7 +23,8 @@ from .models import SearchResult, StreamSource
 class CatalogView(QWidget):
     """Netflix-style catalog surface for an active VEYRA provider."""
 
-    play_requested = Signal(str)
+    # Emits the complete source so headers, subtitles and format are preserved.
+    play_requested = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -42,7 +43,6 @@ class CatalogView(QWidget):
         self.results.setViewMode(QListWidget.ViewMode.IconMode)
         self.results.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.results.setMovement(QListWidget.Movement.Static)
-        self.results.setIconSize(self.results.iconSize())
         self.results.itemDoubleClicked.connect(self.open_item)
         top = QHBoxLayout()
         top.addWidget(self.search, 1)
@@ -90,19 +90,13 @@ class CatalogView(QWidget):
             card = QListWidgetItem(result.title)
             card.setToolTip(f"{result.title}\n{result.year or ''} · {result.kind}")
             card.setData(Qt.ItemDataRole.UserRole, result)
-            card.setSizeHint(self.results.iconSize())
             if result.poster:
                 try:
                     data = urlopen(result.poster, timeout=5).read()
                     pixmap = QPixmap()
                     pixmap.loadFromData(data)
                     if not pixmap.isNull():
-                        scaled = pixmap.scaled(
-                            140,
-                            200,
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation,
-                        )
+                        scaled = pixmap.scaled(140, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                         card.setIcon(QIcon(scaled))
                 except (OSError, ValueError, TypeError):
                     pass
@@ -120,7 +114,7 @@ class CatalogView(QWidget):
             self._show_error("No playable stream was returned for this title.")
             return
         if len(streams) == 1:
-            self.play_requested.emit(streams[0].url)
+            self.play_requested.emit(streams[0])
             return
         self._choose_stream(result, streams)
 
@@ -135,6 +129,10 @@ class CatalogView(QWidget):
             label = stream.quality or "Auto"
             if stream.format:
                 label += f" · {stream.format.upper()}"
+            if stream.headers:
+                label += " · headers"
+            if stream.subtitles:
+                label += f" · {len(stream.subtitles)} subtitle(s)"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, index)
             choices.addItem(item)
@@ -146,7 +144,7 @@ class CatalogView(QWidget):
         layout.addWidget(buttons)
         if dialog.exec() == QDialog.DialogCode.Accepted and choices.currentItem() is not None:
             index = choices.currentItem().data(Qt.ItemDataRole.UserRole)
-            self.play_requested.emit(streams[int(index)].url)
+            self.play_requested.emit(streams[int(index)])
 
     def _show_error(self, message: str) -> None:
         self.heading.setText(message)
