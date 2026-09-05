@@ -16,7 +16,7 @@ env:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,14 +41,20 @@ jobs:
         env:
           VeyraCs3Apk: ${{ github.workspace }}/runtime/android-host/app/build/outputs/apk/debug/app-debug.apk
         with:
-          api-level: 35
+          api-level: 34
           arch: x86_64
           target: google_apis
-          profile: pixel_6
+          profile: Nexus 6
           cores: 2
-          ram-size: 4096M
-          heap-size: 1024M
+          ram-size: 2048M
+          heap-size: 512M
+          emulator-boot-timeout: 1200
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          disable-spellchecker: true
           script: |
+            adb wait-for-device
+            adb shell getprop sys.boot_completed
             adb logcat -c
             VeyraCs3Apk="$VeyraCs3Apk" VeyraCs3E2ePluginUrl="${{ env.PLUGIN_URL }}" python - <<'PY'
             import os
