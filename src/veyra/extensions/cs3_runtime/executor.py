@@ -46,13 +46,7 @@ class CS3ExecutorError(RuntimeError):
 
 
 class ExternalCS3Executor:
-    """Bridge VEYRA's sidecar protocol to a real DEX-capable runtime.
-
-    The executor is intentionally a separate process. This keeps untrusted
-    extension code outside the VEYRA Python process and lets Windows builds
-    provide a native/Android-compatible DEX backend without changing the
-    provider API.
-    """
+    """Bridge VEYRA's sidecar protocol to a real DEX-capable runtime."""
 
     def __init__(self, executable: Path | None = None, timeout: float = 45.0) -> None:
         self.executable = executable or self.discover()
@@ -85,6 +79,10 @@ class ExternalCS3Executor:
     @property
     def available(self) -> bool:
         return bool(self.executable and self.executable.is_file())
+
+    def request(self, method: str, package: Path, payload: dict[str, Any]) -> dict[str, Any]:
+        """Send one CS3 RPC request to the isolated execution backend."""
+        return self.execute(method, package, payload)
 
     def execute(self, method: str, package: Path, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.available:
