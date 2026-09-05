@@ -20,7 +20,7 @@ def _fmt_ms(value: int) -> str:
 def main() -> int:
     try:
         from PySide6.QtCore import Qt, QUrl
-        from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QPushButton, QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
         from PySide6.QtMultimediaWidgets import QVideoWidget
         from .extensions.host import load_enabled_providers
@@ -160,7 +160,6 @@ def main() -> int:
                 status.setText(f"{_plugin.name} is not a VEYRA-native provider. A provider.py based extension is required.")
                 return
             catalog.set_provider(provider)
-            catalog.play_requested.connect(load_source)
             status.setText(f"Loaded extension: {provider.name}")
             pages.setCurrentWidget(catalog)
         elif registry.all():
@@ -168,6 +167,8 @@ def main() -> int:
             catalog.set_provider(provider)
             status.setText(f"Loaded extension: {provider.name}")
             pages.setCurrentWidget(catalog)
+
+    catalog.play_requested.connect(load_source)
 
     def show_extensions() -> None:
         from .extensions.ui import RepositoryDialog
