@@ -15,10 +15,17 @@ def candidate_paths() -> tuple[Path, ...]:
     exe_name = "veyra-cs3-runtime.exe" if os.name == "nt" else "veyra-cs3-runtime"
     here = Path(__file__).resolve()
     candidates.extend((
+        # Installed/source-tree runtime locations.
         here.parent / exe_name,
         here.parents[4] / "runtime" / exe_name,
         Path(sys_prefix()) / "Scripts" / exe_name,
     ))
+
+    # PyInstaller/installed application: ship the sidecar next to VEYRA.exe.
+    executable = Path(os.path.abspath(sys.executable))
+    if executable.name:
+        candidates.append(executable.parent / exe_name)
+
     return tuple(dict.fromkeys(candidates))
 
 
