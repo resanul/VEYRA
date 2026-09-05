@@ -1,0 +1,190 @@
+name: VEYRA Release Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit + syntax
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+
+      - name: Syntax check
+        run: python -m compileall -q src tests build_entry.py runtime/veyra_cs3_runtime.py
+
+      - name: Unit tests
+        run: python -m pytest -q -m "not e2e"
+
+  player:
+    name: Player state E2E
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_MEDIA_BACKEND: ffmpeg
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install FFmpeg
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+
+      - name: Player state E2E
+        run: python -m pytest -q -m e2e tests/test_player_e2e.py
+
+  network:
+    name: Network playback E2E
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_MEDIA_BACKEND: ffmpeg
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+
+      - name: Network playback E2E
+        run: python -m pytest -q -m e2e tests/test_network_playback_e2e.py
+
+  adaptive:
+    name: HLS + DASH E2E
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install FFmpeg
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+
+      - name: Adaptive playback E2E
+        run: python -m pytest -q -m e2e tests/test_adaptive_playback_e2e.py
+
+  package:
+    name: Windows package
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]' pyinstaller
+
+      - name: Syntax check
+        run: python -m compileall -q src tests build_entry.py runtime/veyra_cs3_runtime.py
+
+      - name: Build wheel
+        run: python -m pip wheel . --no-deps -w dist
+
+      - name: Build VEYRA.exe
+        run: >-
+          pyinstaller --noconfirm --clean --windowed --name VEYRA
+          --paths src --collect-all PySide6 build_entry.py
+
+      - name: Build CS3 runtime
+        run: >-
+          pyinstaller --noconfirm --clean --console --onefile
+          --name veyra-cs3-runtime --paths src runtime/veyra_cs3_runtime.py
+
+      - name: Validate package contents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item 'dist/veyra-cs3-runtime.exe' 'dist/VEYRA/veyra-cs3-runtime.exe' -Force
+          if (-not (Test-Path 'dist/VEYRA/VEYRA.exe')) { throw 'VEYRA.exe missing.' }
+          if (-not (Test-Path 'dist/VEYRA/veyra-cs3-runtime.exe')) { throw 'CS3 runtime missing.' }
+          Compress-Archive -Path 'dist/VEYRA/*' -DestinationPath 'dist/VEYRA-Windows-x64.zip' -Force
+          if (-not (Test-Path 'dist/VEYRA-Windows-x64.zip')) { throw 'Windows package archive missing.' }
+
+  gate:
+    name: RELEASE GATE
+    runs-on: windows-latest
+    needs: [unit, player, network, adaptive, package]
+    if: ${{ always() }}
+    steps:
+      - name: Verify all release checks passed
+        shell: pwsh
+        run: |
+          $results = @{
+            unit = '${{ needs.unit.result }}'
+            player = '${{ needs.player.result }}'
+            network = '${{ needs.network.result }}'
+            adaptive = '${{ needs.adaptive.result }}'
+            package = '${{ needs.package.result }}'
+          }
+          $results.GetEnumerator() | Sort-Object Name | ForEach-Object {
+            Write-Host ("{0}: {1}" -f $_.Key, $_.Value)
+          }
+          $failed = $results.GetEnumerator() | Where-Object { $_.Value -ne 'success' }
+          if ($failed) {
+            throw 'VEYRA Release Gate failed.'
+          }
+          Write-Host 'VEYRA Release Gate: PASSED'
