@@ -4,8 +4,37 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutorCapabilities:
+    """Explicit capabilities advertised by a CS3 execution backend."""
+
+    protocol: int
+    runtime: str
+    dex_execution: bool = False
+    android_api_bridge: bool = False
+    cloudstream_api_bridge: bool = False
+
+    @classmethod
+    def from_response(cls, response: dict[str, Any]) -> "ExecutorCapabilities":
+        if not isinstance(response, dict):
+            raise TypeError("executor capability response must be an object")
+        return cls(
+            protocol=int(response.get("protocol", 0)),
+            runtime=str(response.get("runtime", "unknown")),
+            dex_execution=bool(response.get("dex_execution", False)),
+            android_api_bridge=bool(response.get("android_api_bridge", False)),
+            cloudstream_api_bridge=bool(response.get("cloudstream_api_bridge", False)),
+        )
+
+    @property
+    def real_cs3_execution(self) -> bool:
+        """True only when all runtime layers required by CS3 are present."""
+        return all((self.dex_execution, self.android_api_bridge, self.cloudstream_api_bridge))
 
 
 class CS3ExecutorUnavailable(RuntimeError):
