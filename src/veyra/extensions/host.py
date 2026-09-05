@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from veyra.providers.models import SearchResult, StreamSource
@@ -19,7 +20,8 @@ spec.loader.exec_module(module)
 factory = getattr(module, "create_provider", None)
 provider = factory() if callable(factory) else getattr(module, "Provider")()
 request = json.loads(sys.stdin.read() or "{}")
-result = getattr(provider, method)(request.get("query") if method == "search" else request.get("item"))
+argument = request.get("query") if method == "search" else request.get("item")
+result = getattr(provider, method)(argument)
 def encode(value):
     if hasattr(value, "__dataclass_fields__"):
         return {k: encode(getattr(value, k)) for k in value.__dataclass_fields__}
@@ -33,7 +35,7 @@ print(json.dumps(encode(list(result))))
 
 
 class IsolatedProvider:
-    """Provider proxy executed outside the VEYRA UI process."""
+    """Provider proxy executed in a separate Python process."""
 
     def __init__(self, extension_id: str, name: str, provider_file: Path, timeout: float = 45.0) -> None:
         self.id = extension_id
@@ -44,11 +46,8 @@ class IsolatedProvider:
     def _call(self, method: str, payload: object) -> list[dict]:
         completed = subprocess.run(
             [sys.executable, "-I", "-c", _RUNNER, str(self.provider_file), method],
-            input=json.dumps(payload),
-            text=True,
-            capture_output=True,
-            timeout=self.timeout,
-            check=False,
+            input=json.dumps(payload), text=True, capture_output=True,
+            timeout=self.timeout, check=False,
         )
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip() or "extension provider failed")
@@ -59,4 +58,4 @@ class IsolatedProvider:
         return [SearchResult(**row) for row in self._call("search", {"query": query})]
 
     def streams(self, item: SearchResult):
-        return [StreamSource(**row) for row in self._call("streams", {"item": item.__dict__})]
+        return [StreamSource(**row) for row in self._call("streams", {"item": asdict(item)})]
