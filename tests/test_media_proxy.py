@@ -15,7 +15,7 @@ def test_prepare_keeps_plain_remote_url_without_request_headers() -> None:
         proxy.close()
 
 
-def test_prepare_wraps_authenticated_remote_source() -> None:
+def test_prepare_wraps_authenticated_remote_source_and_preserves_extension() -> None:
     proxy = MediaStreamProxy()
     try:
         source = StreamSource(
@@ -26,13 +26,14 @@ def test_prepare_wraps_authenticated_remote_source() -> None:
         parts = urlsplit(wrapped)
         assert parts.hostname == "127.0.0.1"
         assert parts.path.startswith("/stream/")
+        assert parts.path.endswith("/media.m3u8")
         assert parse_qs(parts.query)["url"] == [source.url]
         assert parts.port == proxy.port
     finally:
         proxy.close()
 
 
-def test_hls_manifest_rewrites_uri_and_segments() -> None:
+def test_hls_manifest_rewrites_uri_and_segments_with_extensions() -> None:
     server = _MediaProxyServer(("127.0.0.1", 0))
     try:
         token = "test-token"
@@ -42,8 +43,8 @@ def test_hls_manifest_rewrites_uri_and_segments() -> None:
         segment_url = rewritten.splitlines()[-1]
         key_parts = urlsplit(key_url)
         segment_parts = urlsplit(segment_url)
-        assert key_parts.path == f"/stream/{token}"
-        assert segment_parts.path == f"/stream/{token}"
+        assert key_parts.path == f"/stream/{token}/media.bin"
+        assert segment_parts.path == f"/stream/{token}/media.ts"
         assert "keys/key.bin" in parse_qs(key_parts.query)["url"][0]
         assert "segments/one.ts" in parse_qs(segment_parts.query)["url"][0]
     finally:
@@ -63,8 +64,8 @@ def test_dash_manifest_rewrites_segment_attributes_and_base_url() -> None:
         assert "video/" in parse_qs(urlsplit(base_url).query)["url"][0]
         assert "chunk-$Number$.m4s" in parse_qs(urlsplit(media_url).query)["url"][0]
         assert "init.mp4" in parse_qs(urlsplit(init_url).query)["url"][0]
-        assert urlsplit(base_url).path == f"/stream/{token}"
-        assert urlsplit(media_url).path == f"/stream/{token}"
-        assert urlsplit(init_url).path == f"/stream/{token}"
+        assert urlsplit(base_url).path == f"/stream/{token}/media"
+        assert urlsplit(media_url).path == f"/stream/{token}/media.m4s"
+        assert urlsplit(init_url).path == f"/stream/{token}/media.mp4"
     finally:
         server.server_close()
