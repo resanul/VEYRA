@@ -10,7 +10,6 @@ from .providers.stream_request import PlayRequest
 from .subtitle_controls import install_subtitle_controls
 from .subtitles import SubtitleEngine
 
-
 VEYRA_VERSION = "0.3.2"
 
 
@@ -34,19 +33,9 @@ def main() -> int:
         from PySide6.QtCore import Qt, QUrl
         from PySide6.QtGui import QKeySequence, QShortcut
         from PySide6.QtWidgets import (
-            QApplication,
-            QFileDialog,
-            QHBoxLayout,
-            QLabel,
-            QMainWindow,
-            QMenu,
-            QMessageBox,
-            QPushButton,
-            QSlider,
-            QSpinBox,
-            QStackedWidget,
-            QVBoxLayout,
-            QWidget,
+            QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow,
+            QMenu, QMessageBox, QPushButton, QSlider, QSpinBox,
+            QStackedWidget, QVBoxLayout, QWidget,
         )
         from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
         from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -90,15 +79,10 @@ def main() -> int:
     player_status = QLabel("Select a title from an extension catalog to play it.")
     player_layout.addWidget(player_status)
 
-    # External subtitle rendering is intentionally independent from Qt's
-    # embedded subtitle tracks. This works for remote sources and local files.
     subtitle_overlay = QLabel(video)
     subtitle_overlay.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
     subtitle_overlay.setWordWrap(True)
-    subtitle_overlay.setStyleSheet(
-        "QLabel{color:white;background:rgba(0,0,0,150);padding:8px 16px;"
-        "font-size:20px;font-weight:600;border-radius:5px;}"
-    )
+    subtitle_overlay.setStyleSheet("QLabel{color:white;background:rgba(0,0,0,150);padding:8px 16px;font-size:20px;font-weight:600;border-radius:5px;}")
     subtitle_overlay.setMargin(4)
     subtitle_overlay.hide()
     subtitle_overlay.raise_()
@@ -180,7 +164,7 @@ def main() -> int:
     video_menu = tracks_menu.addMenu("Video")
     subtitle_menu = tracks_menu.addMenu("Subtitles")
     tracks_btn.setMenu(tracks_menu)
-    install_subtitle_controls(window, video, subtitle_overlay, subtitle_engine, subtitle_menu)
+    install_subtitle_controls(window, video, subtitle_overlay, subtitle_engine, tracks_menu)
 
     def _meta_text(metadata, key) -> str | None:
         try:
@@ -242,12 +226,7 @@ def main() -> int:
         subtitle_overlay.hide()
 
     def _load_subtitle_file() -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            window,
-            "Load subtitle",
-            str(Path.home()),
-            "Subtitles (*.srt *.vtt *.ass *.ssa);;All files (*.*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(window, "Load subtitle", str(Path.home()), "Subtitles (*.srt *.vtt *.ass *.ssa);;All files (*.*)")
         if path:
             _load_external_subtitle(path)
 
@@ -270,7 +249,6 @@ def main() -> int:
         elif kind is TrackKind.SUBTITLE:
             note = menu.addAction("No embedded subtitles")
             note.setEnabled(False)
-
         if kind is TrackKind.SUBTITLE:
             if current_request and current_request.source.subtitles:
                 menu.addSeparator()
