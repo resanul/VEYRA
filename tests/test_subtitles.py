@@ -2,14 +2,36 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from veyra.subtitles import SubtitleEngine, parse_ass, parse_srt, parse_vtt
+import pytest
+
+from veyra.subtitles import SubtitleEngine, SubtitleStyle, parse_ass, parse_srt, parse_vtt
 
 
-SRT = """1\n00:00:01,000 --> 00:00:02,500\nHello <i>world</i>!\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond line\n"""
+SRT = """1
+00:00:01,000 --> 00:00:02,500
+Hello <i>world</i>!
 
-VTT = """WEBVTT\n\n00:00:00.500 --> 00:00:01.500 align:start\nFirst cue\n\n00:00:02.000 --> 00:00:03.000\nSecond cue\n"""
+2
+00:00:03,000 --> 00:00:04,000
+Second line
+"""
 
-ASS = """[Script Info]\nTitle: Demo\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,Hello {\\i1}world{\\i0}\\Nsecond line\n"""
+VTT = """WEBVTT
+
+00:00:00.500 --> 00:00:01.500 align:start
+First cue
+
+00:00:02.000 --> 00:00:03.000
+Second cue
+"""
+
+ASS = """[Script Info]
+Title: Demo
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,Hello {\i1}world{\i0}\Nsecond line
+"""
 
 
 def test_parse_srt_strips_markup_and_preserves_timing() -> None:
@@ -56,3 +78,28 @@ def test_engine_clear() -> None:
     engine.clear()
     assert engine.cues == ()
     assert engine.text_at(1000) == ""
+
+
+def test_subtitle_style_validates_and_copies_changes() -> None:
+    style = SubtitleStyle()
+    updated = style.with_changes(font_size=32, background_opacity=64, bold=False)
+    assert style.font_size == 20
+    assert updated.font_size == 32
+    assert updated.background_opacity == 64
+    assert updated.bold is False
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"font_size": 9},
+        {"font_size": 65},
+        {"bottom_margin": -1},
+        {"bottom_margin": 241},
+        {"background_opacity": -1},
+        {"background_opacity": 256},
+    ],
+)
+def test_subtitle_style_rejects_invalid_values(changes: dict[str, int]) -> None:
+    with pytest.raises(ValueError):
+        SubtitleStyle(**changes)
