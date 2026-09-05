@@ -5,9 +5,10 @@ from pathlib import Path
 
 from .history import PlaybackHistory
 from .models import MediaItem
+from .providers.stream_request import PlayRequest
 
 
-VEYRA_VERSION = "0.3.0"
+VEYRA_VERSION = "0.3.1"
 
 
 def _fmt_ms(value: int) -> str:
@@ -46,6 +47,7 @@ def main() -> int:
     audio.setVolume(1.0)
     history = PlaybackHistory()
     current: MediaItem | None = None
+    current_request: PlayRequest | None = None
     registry = load_enabled_providers()
 
     catalog = CatalogView()
@@ -110,15 +112,35 @@ def main() -> int:
     root.setLayout(root_layout)
     window.setCentralWidget(root)
 
-    def load_source(source: str) -> None:
-        nonlocal current
-        current = MediaItem.from_source(source)
+    def load_source(request: PlayRequest | object) -> None:
+        nonlocal current, current_request
+        if isinstance(request, PlayRequest):
+            play_request = request
+        else:
+            from .providers.models import StreamSource
+            if not isinstance(request, StreamSource):
+                status.setText("Invalid playback request.")
+                return
+            play_request = PlayRequest.from_source(request)
+        current_request = play_request
+        source = play_request.source.url
+        title_text = play_request.title or play_request.item.title if play_request.item else play_request.title
+        current = MediaItem(id=source, title=title_text or Path(source).name or source, source=source, media_type=MediaItem.from_source(source).media_type)
         player.setSource(QUrl.fromUserInput(source) if source.startswith(("http://", "https://")) else QUrl.fromLocalFile(source))
         record = history.get(source)
         player.play()
         if record and record.position_ms > 5000:
             player.setPosition(record.position_ms)
-        player_status.setText(f"Playing: {current.title}")
+        details = [f"Playing: {current.title}"]
+        if play_request.source.quality:
+            details.append(play_request.source.quality)
+        if play_request.source.format:
+            details.append(play_request.source.format.upper())
+        if play_request.headers:
+            details.append(f"{len(play_request.headers)} headers")
+        if play_request.subtitles:
+            details.append(f"{len(play_request.subtitles)} subtitle(s)")
+        player_status.setText(" · ".join(details))
         pages.setCurrentWidget(player_page)
 
     def open_media() -> None:
@@ -157,7 +179,7 @@ def main() -> int:
         if _plugin is not None:
             provider = registry.get(_plugin.id)
             if provider is None:
-                status.setText(f"{_plugin.name} is not a VEYRA-native provider. A provider.py based extension is required.")
+                status.setText(f"{_plugin.name} could not be loaded by the active provider runtime.")
                 return
             catalog.set_provider(provider)
             status.setText(f"Loaded extension: {provider.name}")
