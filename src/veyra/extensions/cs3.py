@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .cs3_api import CloudStreamApiBridge, CS3ProviderInfo, search_result_from_cloudstream, stream_source_from_cloudstream
+from .cs3_runtime.discovery import discover_runtime
 from veyra.providers.models import SearchResult, StreamSource
 
 
@@ -72,19 +73,10 @@ class CS3RuntimeError(RuntimeError):
 
 
 class CS3Sidecar:
-    """JSON-lines process boundary for the clean-room CS3 compatibility runtime.
-
-    The sidecar is deliberately separate from the Python GUI. Its executable
-    receives one JSON request on stdin and returns one JSON response on stdout.
-    Protocol version 1 maps CloudStream MainAPI/ExtractorApi operations to the
-    VEYRA catalog contract without loading DEX inside the Python process.
-    """
-
     PROTOCOL_VERSION = 1
 
     def __init__(self, executable: Path | None = None, timeout: float = 45.0) -> None:
-        configured = executable or os.environ.get("VEYRA_CS3_RUNTIME")
-        self.executable = Path(configured) if configured else None
+        self.executable = executable or discover_runtime()
         self.timeout = timeout
 
     @property
@@ -93,23 +85,12 @@ class CS3Sidecar:
 
     def request(self, method: str, package: Path, payload: dict | None = None) -> dict:
         if not self.available:
-            raise CS3RuntimeUnavailable(
-                "VEYRA_CS3_RUNTIME is not configured; install the VEYRA CS3 sidecar runtime first."
-            )
-        request = {
-            "protocol": self.PROTOCOL_VERSION,
-            "method": method,
-            "package": str(package.resolve()),
-            "payload": payload or {},
-        }
-        completed = subprocess.run(
-            [str(self.executable)],
-            input=json.dumps(request) + "\n",
-            text=True,
-            capture_output=True,
-            timeout=self.timeout,
-            check=False,
-        )
+            raise CS3RuntimeUnavailable("No VEYRA CS3 sidecar runtime was discovered.")
+        request = {"protocol": self.PROTOCOL_VERSION, "method": method, "package": str(package.resolve()), "payload": payload or {}}
+        command = [str(self.executable)]
+        if self.executable.suffix.lower() == ".py":
+            command = [os.fspath(__import__("sys").executable), "-I", str(self.executable)]
+        completed = subprocess.run(command, input=json.dumps(request) + "\n", text=True, capture_output=True, timeout=self.timeout, check=False)
         if completed.returncode != 0:
             raise CS3RuntimeError(completed.stderr.strip() or "CS3 sidecar failed")
         try:
@@ -124,8 +105,6 @@ class CS3Sidecar:
 
 
 class CS3Provider:
-    """Adapter exposing a sidecar-backed CS3 plugin as a VEYRA Provider."""
-
     def __init__(self, package: Path, runtime: CS3Sidecar | None = None) -> None:
         inspection = CS3Inspector.inspect(package)
         self.package = inspection.path
@@ -139,23 +118,14 @@ class CS3Provider:
         return self.runtime.request(method, self.package, payload)
 
     def home(self) -> list[SearchResult]:
-        response = self._response("home", {})
-        items = response.get("items", [])
-        return [search_result_from_cloudstream(item) for item in items if isinstance(item, dict)]
+        return [search_result_from_cloudstream(x) for x in self._response("home", {}).get("items", []) if isinstance(x, dict)]
 
     def search(self, query: str) -> list[SearchResult]:
-        response = self._response("search", {"query": query})
-        items = response.get("items", [])
-        return [search_result_from_cloudstream(item) for item in items if isinstance(item, dict)]
+        return [search_result_from_cloudstream(x) for x in self._response("search", {"query": query}).get("items", []) if isinstance(x, dict)]
 
     def streams(self, item: SearchResult) -> list[StreamSource]:
-        response = self._response("streams", {"item": {
-            "id": item.id, "title": item.title, "url": item.url,
-            "kind": item.kind, "year": item.year, "poster": item.poster,
-            "metadata": dict(item.metadata),
-        }})
-        streams = response.get("streams", [])
-        return [stream_source_from_cloudstream(stream) for stream in streams if isinstance(stream, dict)]
+        payload = {"item": {"id": item.id, "title": item.title, "url": item.url, "kind": item.kind, "year": item.year, "poster": item.poster, "metadata": dict(item.metadata)}}
+        return [stream_source_from_cloudstream(x) for x in self._response("streams", payload).get("streams", []) if isinstance(x, dict)]
 
     def registration(self) -> CS3ProviderInfo | None:
         response = self._response("providers", {})
@@ -169,8 +139,6 @@ class CS3Provider:
 
 
 class CS3RuntimeAdapter:
-    """High-level CS3 loader with a real sidecar runtime boundary."""
-
     def __init__(self, inspector: CS3Inspector | None = None, runtime: CS3Sidecar | None = None) -> None:
         self.inspector = inspector or CS3Inspector()
         self.runtime = runtime or CS3Sidecar()
@@ -179,10 +147,6 @@ class CS3RuntimeAdapter:
         inspection = self.inspector.inspect(path)
         if inspection.has_dex:
             if not self.runtime.available:
-                raise CS3RuntimeUnavailable(
-                    "This CS3 package contains Android DEX/JVM plugin code and no compatible sidecar is installed."
-                )
-            # The sidecar owns DEX/JVM execution; Python receives only the
-            # translated MainAPI/ExtractorApi wire contract.
+                raise CS3RuntimeUnavailable("This CS3 package contains Android DEX/JVM plugin code and no compatible sidecar is installed.")
             return CS3Provider(inspection.path, self.runtime)
         return inspection
