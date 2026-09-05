@@ -4,11 +4,7 @@ from dataclasses import replace
 
 
 def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_menu, *, settings=None):
-    """Install persistent subtitle sync/styling actions into the player menu.
-
-    ``parent_menu`` must not be rebuilt by track discovery; the caller can
-    therefore refresh the embedded-track submenu without deleting these controls.
-    """
+    """Install persistent subtitle sync/styling actions into the player menu."""
     from PySide6.QtCore import QSettings
     from PySide6.QtGui import QKeySequence, QShortcut
 
@@ -25,11 +21,17 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_me
     except (TypeError, ValueError):
         style = SubtitleStyle()
 
+    try:
+        subtitle_engine.set_offset(int(store.value("subtitle/offset_ms", 0)))
+    except (TypeError, ValueError):
+        subtitle_engine.set_offset(0)
+
     def save_style() -> None:
         store.setValue("subtitle/font_size", style.font_size)
         store.setValue("subtitle/bottom_margin", style.bottom_margin)
         store.setValue("subtitle/background_opacity", style.background_opacity)
         store.setValue("subtitle/bold", style.bold)
+        store.setValue("subtitle/offset_ms", subtitle_engine.offset_ms)
         store.sync()
 
     def apply_style() -> None:
@@ -61,18 +63,24 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_me
     sync_plus = sync_menu.addAction("Delay +0.1 s")
     sync_plus_1 = sync_menu.addAction("Delay +1.0 s")
     sync_menu.addSeparator()
-    sync_status = sync_menu.addAction("Current: +0.0 s")
+    sync_status = sync_menu.addAction(f"Current: {subtitle_engine.offset_ms / 1000:+.1f} s")
     sync_status.setEnabled(False)
 
     def adjust_sync(delta: int) -> None:
         subtitle_engine.adjust_offset(delta)
         sync_status.setText(f"Current: {subtitle_engine.offset_ms / 1000:+.1f} s")
+        save_style()
+
+    def reset_sync() -> None:
+        subtitle_engine.set_offset(0)
+        sync_status.setText("Current: +0.0 s")
+        save_style()
 
     sync_minus_1.triggered.connect(lambda: adjust_sync(-1000))
     sync_minus.triggered.connect(lambda: adjust_sync(-100))
     sync_plus.triggered.connect(lambda: adjust_sync(100))
     sync_plus_1.triggered.connect(lambda: adjust_sync(1000))
-    sync_reset.triggered.connect(lambda: (subtitle_engine.set_offset(0), sync_status.setText("Current: +0.0 s")))
+    sync_reset.triggered.connect(reset_sync)
 
     style_menu = settings_menu.addMenu("Subtitle styling")
     size_menu = style_menu.addMenu("Font size")
