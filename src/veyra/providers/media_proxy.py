@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass
 from http.cookiejar import CookieJar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 from .models import StreamSource
@@ -23,6 +23,7 @@ _HOP_BY_HOP = {
     "transfer-encoding",
     "upgrade",
 }
+_CLIENT_DISCONNECTS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 
 
 def _is_manifest(url: str, content_type: str = "") -> bool:
@@ -66,7 +67,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             session = self.server.sessions[token]
             upstream_values = parse_qs(parsed.query).get("url", [])
             upstream_url = upstream_values[0] if upstream_values else ""
-            upstream_url = unquote(upstream_url)
+            # parse_qs() already percent-decodes the query value. A second
+            # unquote() would corrupt legitimate percent-encoded upstream URLs.
             if urlsplit(upstream_url).scheme not in {"http", "https"}:
                 raise ValueError("unsupported upstream scheme")
         except (KeyError, ValueError, UnicodeError):
@@ -102,16 +104,27 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 if head_only:
                     return
                 if body is not None:
-                    self.wfile.write(rewritten)
+                    try:
+                        self.wfile.write(rewritten)
+                    except _CLIENT_DISCONNECTS:
+                        return
                     return
                 while True:
                     chunk = response.read(256 * 1024)
                     if not chunk:
                         break
-                    self.wfile.write(chunk)
+                    try:
+                        self.wfile.write(chunk)
+                    except _CLIENT_DISCONNECTS:
+                        return
+        except _CLIENT_DISCONNECTS:
+            return
         except Exception as exc:  # pragma: no cover - exercised by real playback
-            if not self.wfile.closed:
-                self.send_error(502, f"Upstream media request failed: {exc}")
+            try:
+                if not self.wfile.closed:
+                    self.send_error(502, f"Upstream media request failed: {exc}")
+            except _CLIENT_DISCONNECTS:
+                return
 
 
 @dataclass(slots=True)
