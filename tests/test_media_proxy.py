@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
-from veyra.providers.media_proxy import MediaStreamProxy, _MediaProxyServer, _encode_url
+from veyra.providers.media_proxy import MediaStreamProxy, _MediaProxyServer, _decode_url, _encode_url
 from veyra.providers.models import StreamSource
 
 
@@ -26,7 +26,7 @@ def test_prepare_wraps_authenticated_remote_source() -> None:
         parts = urlsplit(wrapped)
         assert parts.hostname == "127.0.0.1"
         assert "/stream/" in parts.path
-        assert unquote(parts.path.rsplit("/", 1)[-1]) != source.url
+        assert _decode_url(parts.path.rsplit("/", 1)[-1]) == source.url
         assert parts.port == proxy.port
     finally:
         proxy.close()
