@@ -10,6 +10,7 @@ from pathlib import Path
 from .cs3_api import CloudStreamApiBridge, CS3ProviderInfo, search_result_from_cloudstream, stream_source_from_cloudstream
 from .cs3_runtime.cloudstream_lifecycle import CloudStreamLifecycleAdapter
 from .cs3_runtime.discovery import discover_runtime
+from .cs3_runtime.executor import CS3ExecutorUnavailable, WindowsCS3Executor
 from veyra.providers.models import SearchResult, StreamSource
 
 
@@ -66,7 +67,7 @@ class CS3Inspector:
 
 
 class CS3RuntimeUnavailable(RuntimeError):
-    """Raised when no compatible CS3 sidecar runtime is available."""
+    """Raised when no compatible CS3 sidecar/runtime is available."""
 
 
 class CS3RuntimeError(RuntimeError):
@@ -106,12 +107,12 @@ class CS3Sidecar:
 
 
 class CS3Provider:
-    def __init__(self, package: Path, runtime: CS3Sidecar | None = None) -> None:
+    def __init__(self, package: Path, runtime=None) -> None:
         inspection = CS3Inspector.inspect(package)
         self.package = inspection.path
         self.id = inspection.manifest.internal_name
         self.name = inspection.manifest.name
-        self.runtime = runtime or CS3Sidecar()
+        self.runtime = runtime or _default_runtime()
         self.inspection = inspection
         self.info: CS3ProviderInfo | None = None
 
@@ -146,15 +147,29 @@ class CS3Provider:
         return self.info
 
 
+def _default_runtime():
+    """Select the platform runtime without making Android part of Windows VEYRA."""
+    if os.name == "nt":
+        return WindowsCS3Executor()
+    return CS3Sidecar()
+
+
 class CS3RuntimeAdapter:
-    def __init__(self, inspector: CS3Inspector | None = None, runtime: CS3Sidecar | None = None) -> None:
+    def __init__(self, inspector: CS3Inspector | None = None, runtime=None) -> None:
         self.inspector = inspector or CS3Inspector()
-        self.runtime = runtime or CS3Sidecar()
+        self.runtime = runtime or _default_runtime()
 
     def load(self, path: Path) -> CS3Inspection | CS3Provider:
         inspection = self.inspector.inspect(path)
         if inspection.has_dex:
-            if not self.runtime.available:
-                raise CS3RuntimeUnavailable("This CS3 package contains Android DEX/JVM plugin code and no compatible sidecar is installed.")
+            if not getattr(self.runtime, "available", False):
+                if os.name == "nt":
+                    raise CS3RuntimeUnavailable(
+                        "Windows CS3 execution backend is not installed. "
+                        "Set VEYRA_CS3_EXECUTOR to a trusted DEX-capable Windows worker."
+                    )
+                raise CS3RuntimeUnavailable(
+                    "This CS3 package contains Android DEX/JVM plugin code and no compatible sidecar is installed."
+                )
             return CS3Provider(inspection.path, self.runtime)
         return inspection
