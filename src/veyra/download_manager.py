@@ -347,7 +347,13 @@ class DownloadManager:
                         return
                     read1 = getattr(response, "read1", None)
                     chunk = read1(self.CHUNK_SIZE) if read1 is not None else response.read(self.CHUNK_SIZE)
+                    # read1() is intentionally non-blocking with respect to the
+                    # requested size, but it may return b"" while the peer is still
+                    # producing a known-length response. Do not mistake that for EOF.
                     if not chunk:
+                        if total > 0 and downloaded < total:
+                            time.sleep(0.01)
+                            continue
                         break
                     output.write(chunk)
                     output.flush()
