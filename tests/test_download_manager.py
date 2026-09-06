@@ -97,6 +97,16 @@ def wait_for(manager: DownloadManager, task_id: str, timeout: float = 5.0):
     pytest.fail("download worker did not finish in time")
 
 
+def wait_for_status(manager: DownloadManager, task_id: str, status: DownloadStatus, timeout: float = 5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        task = manager.get(task_id)
+        if task and task.status is status:
+            return task
+        time.sleep(0.01)
+    pytest.fail(f"download did not reach {status.value}")
+
+
 def test_filename_from_url_is_safe() -> None:
     assert DownloadManager.filename_from_url("https://example.test/a%20movie") == "a movie"
     assert DownloadManager.filename_from_url("https://example.test/a:b.mp4") == "b.mp4"
@@ -132,7 +142,6 @@ def test_queue_respects_max_concurrency(slow_server, tmp_path: Path) -> None:
         manager.start(task.id)
     results = [wait_for(manager, task.id, timeout=10) for task in tasks]
     assert all(task.status is DownloadStatus.COMPLETED for task in results)
-    assert SlowHandler.peak <= 2
     assert SlowHandler.peak == 2
     manager.shutdown()
 
@@ -144,4 +153,75 @@ def test_start_all_only_uses_bounded_workers(slow_server, tmp_path: Path) -> Non
     results = [wait_for(manager, task.id, timeout=10) for task in tasks]
     assert all(task.status is DownloadStatus.COMPLETED for task in results)
     assert SlowHandler.peak == 2
+    manager.shutdown()
+
+
+def test_queued_pause_and_resume_preserve_queue_state(slow_server, tmp_path: Path) -> None:
+    manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
+    first = manager.add(slow_server, filename="first.bin")
+    second = manager.add(slow_server, filename="second.bin")
+    manager.start(first.id)
+    manager.start(second.id)
+    wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
+    manager.pause(second.id)
+    assert manager.get(second.id).status is DownloadStatus.PAUSED
+    assert manager.queued_count() == 0
+    assert manager.active_count() == 1
+    manager.resume(second.id)
+    assert manager.get(second.id).status in {DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING}
+    assert wait_for(manager, first.id, timeout=10).status is DownloadStatus.COMPLETED
+    assert wait_for(manager, second.id, timeout=10).status is DownloadStatus.COMPLETED
+    manager.shutdown()
+
+
+def test_pause_active_then_resume_downloads_from_partial(slow_server, tmp_path: Path) -> None:
+    manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
+    task = manager.add(slow_server, filename="pause.bin")
+    manager.start(task.id)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        current = manager.get(task.id)
+        if current and current.downloaded_bytes > 0:
+            break
+        time.sleep(0.01)
+    manager.pause(task.id)
+    paused = wait_for_status(manager, task.id, DownloadStatus.PAUSED)
+    assert paused.downloaded_bytes > 0
+    manager.resume(task.id)
+    result = wait_for(manager, task.id, timeout=10)
+    assert result.status is DownloadStatus.COMPLETED
+    assert (tmp_path / "files" / "pause.bin").read_bytes() == PAYLOAD
+    manager.shutdown()
+
+
+def test_cancel_queued_task_does_not_consume_worker_slot(slow_server, tmp_path: Path) -> None:
+    manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
+    first = manager.add(slow_server, filename="running.bin")
+    cancelled = manager.add(slow_server, filename="cancelled.bin")
+    manager.start(first.id)
+    manager.start(cancelled.id)
+    wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
+    manager.cancel(cancelled.id)
+    assert manager.get(cancelled.id).status is DownloadStatus.CANCELLED
+    assert manager.active_count() == 1
+    assert not (tmp_path / "files" / "cancelled.bin").exists()
+    manager.cancel(first.id)
+    assert wait_for(manager, first.id).status is DownloadStatus.CANCELLED
+    manager.shutdown()
+
+
+def test_cancel_active_can_delete_partial(slow_server, tmp_path: Path) -> None:
+    manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
+    task = manager.add(slow_server, filename="delete.bin")
+    manager.start(task.id)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        current = manager.get(task.id)
+        if current and current.downloaded_bytes > 0:
+            break
+        time.sleep(0.01)
+    manager.cancel(task.id, delete_partial=True)
+    assert wait_for(manager, task.id).status is DownloadStatus.CANCELLED
+    assert not (tmp_path / "files" / ".delete.bin.part").exists()
+    assert not (tmp_path / "files" / "delete.bin").exists()
     manager.shutdown()
