@@ -39,11 +39,16 @@ class SlowHandler(BaseHTTPRequestHandler):
     active = 0
     peak = 0
     lock = threading.Lock()
+    hold_next_request = False
+    first_chunk_sent = threading.Event()
+    release_held_request = threading.Event()
 
     def do_GET(self) -> None:  # noqa: N802
         with SlowHandler.lock:
             SlowHandler.active += 1
             SlowHandler.peak = max(SlowHandler.peak, SlowHandler.active)
+            hold_request = SlowHandler.hold_next_request
+            SlowHandler.hold_next_request = False
         try:
             self.send_response(200)
             self.send_header("Content-Length", str(len(PAYLOAD)))
@@ -51,6 +56,9 @@ class SlowHandler(BaseHTTPRequestHandler):
             for offset in range(0, len(PAYLOAD), 1024):
                 self.wfile.write(PAYLOAD[offset:offset + 1024])
                 self.wfile.flush()
+                if offset == 0 and hold_request:
+                    SlowHandler.first_chunk_sent.set()
+                    SlowHandler.release_held_request.wait(timeout=15)
                 time.sleep(0.01)
         finally:
             with SlowHandler.lock:
@@ -77,12 +85,16 @@ def server():
 def slow_server():
     SlowHandler.active = 0
     SlowHandler.peak = 0
+    SlowHandler.hold_next_request = False
+    SlowHandler.first_chunk_sent = threading.Event()
+    SlowHandler.release_held_request = threading.Event()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
         yield f"http://127.0.0.1:{httpd.server_port}/media/slow.bin"
     finally:
+        SlowHandler.release_held_request.set()
         httpd.shutdown()
         thread.join(timeout=2)
 
@@ -180,11 +192,13 @@ def test_start_all_only_uses_bounded_workers(slow_server, tmp_path: Path) -> Non
 
 
 def test_queued_pause_and_resume_preserve_queue_state(slow_server, tmp_path: Path) -> None:
+    SlowHandler.hold_next_request = True
     manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
     first = manager.add(slow_server, filename="first.bin")
     second = manager.add(slow_server, filename="second.bin")
     manager.start(first.id)
     wait_for_partial(manager, first.id)
+    assert SlowHandler.first_chunk_sent.wait(timeout=2)
     manager.start(second.id)
     wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     wait_for_status(manager, second.id, DownloadStatus.QUEUED)
@@ -194,6 +208,7 @@ def test_queued_pause_and_resume_preserve_queue_state(slow_server, tmp_path: Pat
     assert manager.active_count() == 1
     manager.resume(second.id)
     assert manager.get(second.id).status is DownloadStatus.QUEUED
+    SlowHandler.release_held_request.set()
     assert wait_for(manager, first.id, timeout=10).status is DownloadStatus.COMPLETED
     assert wait_for(manager, second.id, timeout=10).status is DownloadStatus.COMPLETED
     manager.shutdown()
@@ -216,11 +231,13 @@ def test_pause_active_then_resume_downloads_from_partial(slow_server, tmp_path: 
 
 
 def test_cancel_queued_task_does_not_consume_worker_slot(slow_server, tmp_path: Path) -> None:
+    SlowHandler.hold_next_request = True
     manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
     first = manager.add(slow_server, filename="running.bin")
     cancelled = manager.add(slow_server, filename="cancelled.bin")
     manager.start(first.id)
     wait_for_partial(manager, first.id)
+    assert SlowHandler.first_chunk_sent.wait(timeout=2)
     manager.start(cancelled.id)
     wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     wait_for_status(manager, cancelled.id, DownloadStatus.QUEUED)
@@ -230,6 +247,7 @@ def test_cancel_queued_task_does_not_consume_worker_slot(slow_server, tmp_path: 
     assert not (tmp_path / "files" / "cancelled.bin").exists()
     manager.cancel(first.id)
     assert wait_for(manager, first.id).status is DownloadStatus.CANCELLED
+    SlowHandler.release_held_request.set()
     wait_for_no_active(manager)
     manager.shutdown()
 
