@@ -223,6 +223,8 @@ class DownloadManager:
             task = self.get(task_id)
             if task is None:
                 raise KeyError(task_id)
+            if task.status == DownloadStatus.COMPLETED:
+                return
             future = self._futures.get(task_id)
             stop = self._stop_events.get(task_id)
             if future and not future.done():
@@ -233,6 +235,7 @@ class DownloadManager:
             self._update(task_id, status=DownloadStatus.CANCELLED)
             if delete_partial:
                 self._part_path(task).unlink(missing_ok=True)
+                (Path(task.destination) / task.filename).unlink(missing_ok=True)
             self._pump()
 
     def remove(self, task_id: str, *, delete_file: bool = False) -> None:
@@ -325,6 +328,13 @@ class DownloadManager:
                     downloaded += len(chunk)
                     self._update(task_id, downloaded_bytes=downloaded, total_bytes=total)
 
+        stop = self._stop_events.get(task_id)
+        pause = self._pause_events.get(task_id)
+        if stop and stop.is_set():
+            return
+        if pause and pause.is_set():
+            self._update(task_id, status=DownloadStatus.PAUSED, downloaded_bytes=downloaded, total_bytes=total)
+            return
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(part, target)
         self._complete(task_id, target, downloaded, hasher.hexdigest())
