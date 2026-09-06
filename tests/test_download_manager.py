@@ -68,11 +68,12 @@ class GateHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(PAYLOAD)))
         self.end_headers()
-        self.wfile.write(PAYLOAD[:1024])
+        first_chunk_size = 256 * 1024
+        self.wfile.write(PAYLOAD[:first_chunk_size])
         self.wfile.flush()
         GateHandler.started.set()
         GateHandler.release.wait(timeout=10)
-        self.wfile.write(PAYLOAD[1024:])
+        self.wfile.write(PAYLOAD[first_chunk_size:])
         self.wfile.flush()
 
     def log_message(self, *_args) -> None:
