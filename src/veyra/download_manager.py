@@ -75,6 +75,9 @@ class DownloadManager:
         self._pause_events: dict[str, threading.Event] = {}
         self._delete_partial_on_cancel: set[str] = set()
         self._futures: dict[str, Future[None]] = {}
+        # Track admitted/running tasks explicitly instead of deriving worker state
+        # from Future.done(), which has a small completion/cleanup race.
+        self._running_tasks: set[str] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_concurrent, thread_name_prefix="veyra-download")
         self._init_db()
 
@@ -152,7 +155,7 @@ class DownloadManager:
 
     def active_count(self) -> int:
         with self._lock:
-            return sum(not future.done() for future in self._futures.values())
+            return len(self._running_tasks)
 
     def queued_count(self) -> int:
         return len(self.list(statuses={DownloadStatus.QUEUED}))
@@ -163,6 +166,8 @@ class DownloadManager:
             if task is None:
                 raise KeyError(task_id)
             if task.status == DownloadStatus.COMPLETED:
+                return
+            if task_id in self._running_tasks:
                 return
             future = self._futures.get(task_id)
             if future and not future.done():
@@ -180,21 +185,25 @@ class DownloadManager:
     def _pump(self) -> None:
         """Start FIFO queued work only while an actual worker slot is available."""
         with self._lock:
-            active = sum(not future.done() for future in self._futures.values())
-            available = max(0, self.max_concurrent - active)
+            available = max(0, self.max_concurrent - len(self._running_tasks))
             if available == 0:
                 return
             queued = self.list(statuses={DownloadStatus.QUEUED})
             for task in queued:
                 if available <= 0:
                     break
-                future = self._futures.get(task.id)
-                if future and not future.done():
+                if task.id in self._running_tasks:
                     continue
                 self._stop_events.setdefault(task.id, threading.Event())
                 self._pause_events.setdefault(task.id, threading.Event())
                 self._update(task.id, status=DownloadStatus.DOWNLOADING, error=None)
-                self._futures[task.id] = self._executor.submit(self._worker, task.id)
+                self._running_tasks.add(task.id)
+                try:
+                    self._futures[task.id] = self._executor.submit(self._worker, task.id)
+                except Exception:
+                    self._running_tasks.discard(task.id)
+                    self._update(task.id, status=DownloadStatus.QUEUED)
+                    raise
                 available -= 1
 
     def pause(self, task_id: str) -> None:
@@ -232,7 +241,7 @@ class DownloadManager:
                 return
             future = self._futures.get(task_id)
             stop = self._stop_events.get(task_id)
-            running = bool(future and not future.done())
+            running = task_id in self._running_tasks
             if running:
                 if stop:
                     stop.set()
@@ -277,6 +286,7 @@ class DownloadManager:
             with self._lock:
                 task = self.get(task_id)
                 delete_partial = task_id in self._delete_partial_on_cancel
+                self._running_tasks.discard(task_id)
                 self._futures.pop(task_id, None)
                 self._stop_events.pop(task_id, None)
                 self._pause_events.pop(task_id, None)
