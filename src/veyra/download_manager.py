@@ -48,11 +48,12 @@ class DownloadTask:
 class DownloadManager:
     """Persistent download queue with bounded concurrent workers and lifecycle controls."""
 
-    # Keep socket reads bounded so lifecycle checks are revisited frequently even
-    # when the peer sends data slowly. A blocking read avoids read1() buffering quirks.
     CHUNK_SIZE = 8 * 1024
     DEFAULT_TIMEOUT = 30.0
     DEFAULT_MAX_CONCURRENT = 3
+    MAX_RETRIES = 3
+    RETRY_BACKOFF = 0.25
+    RETRYABLE_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 
     def __init__(
         self,
@@ -74,8 +75,6 @@ class DownloadManager:
         self._pause_events: dict[str, threading.Event] = {}
         self._delete_partial_on_cancel: set[str] = set()
         self._futures: dict[str, Future[None]] = {}
-        # Track admitted/running tasks explicitly instead of deriving worker state
-        # from Future.done(), which has a small completion/cleanup race.
         self._running_tasks: set[str] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_concurrent, thread_name_prefix="veyra-download")
         self._init_db()
@@ -298,78 +297,131 @@ class DownloadManager:
                     (Path(task.destination) / task.filename).unlink(missing_ok=True)
             self._pump()
 
+    def _is_retryable_http(self, exc: HTTPError) -> bool:
+        return exc.code in self.RETRYABLE_HTTP_STATUS
+
+    def _sleep_before_retry(self, attempt: int, task_id: str) -> bool:
+        delay = self.RETRY_BACKOFF * (2 ** attempt)
+        deadline = time.monotonic() + delay
+        while time.monotonic() < deadline:
+            stop = self._stop_events.get(task_id)
+            pause = self._pause_events.get(task_id)
+            if stop and stop.is_set():
+                return False
+            if pause and pause.is_set():
+                return False
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        return True
+
     def _download(self, task_id: str) -> None:
         task = self.get(task_id)
         if task is None:
             return
         target = Path(task.destination) / task.filename
         part = self._part_path(task)
-        existing = part.stat().st_size if part.exists() else 0
-        request = Request(task.url, headers={"User-Agent": "VEYRA/0.3.2", "Accept": "*/*"}, method="GET")
-        if existing:
-            request.add_header("Range", f"bytes={existing}-")
-        try:
-            response = urlopen(request, timeout=self.DEFAULT_TIMEOUT)
-        except HTTPError as exc:
-            if existing and exc.code == 416:
-                if target.exists() and target.stat().st_size == existing:
-                    self._complete(task_id, target, existing)
-                    return
-                part.unlink(missing_ok=True)
-                existing = 0
-                response = urlopen(Request(task.url, headers={"User-Agent": "VEYRA/0.3.2", "Accept": "*/*"}, method="GET"), timeout=self.DEFAULT_TIMEOUT)
-            else:
-                raise
-        except (URLError, TimeoutError, OSError) as exc:
-            raise RuntimeError(f"download request failed: {exc}") from exc
+        attempt = 0
 
-        with response:
-            status = int(getattr(response, "status", 200))
-            resumed = existing > 0 and status == 206
-            if existing and not resumed:
-                existing = 0
-                part.unlink(missing_ok=True)
-            content_length = response.headers.get("Content-Length")
-            total = existing + int(content_length) if content_length and content_length.isdigit() else 0
-            self._update(task_id, status=DownloadStatus.DOWNLOADING, downloaded_bytes=existing, total_bytes=total, error=None)
-            hasher = hashlib.sha256()
+        while True:
+            current = self.get(task_id)
+            if current is None or current.status == DownloadStatus.CANCELLED:
+                return
+            stop = self._stop_events.get(task_id)
+            pause = self._pause_events.get(task_id)
+            if stop and stop.is_set():
+                return
+            if pause and pause.is_set():
+                self._update(task_id, status=DownloadStatus.PAUSED)
+                return
+
+            existing = part.stat().st_size if part.exists() else 0
+            headers = {"User-Agent": "VEYRA/0.3.2", "Accept": "*/*"}
+            request = Request(task.url, headers=headers, method="GET")
             if existing:
-                with part.open("rb") as previous:
-                    for chunk in iter(lambda: previous.read(self.CHUNK_SIZE), b""):
+                request.add_header("Range", f"bytes={existing}-")
+
+            response = None
+            try:
+                response = urlopen(request, timeout=self.DEFAULT_TIMEOUT)
+                status = int(getattr(response, "status", 200))
+                resumed = existing > 0 and status == 206
+                if existing and not resumed:
+                    existing = 0
+                    part.unlink(missing_ok=True)
+                content_length = response.headers.get("Content-Length")
+                total = existing + int(content_length) if content_length and content_length.isdigit() else 0
+                self._update(
+                    task_id,
+                    status=DownloadStatus.DOWNLOADING,
+                    downloaded_bytes=existing,
+                    total_bytes=total,
+                    error=None,
+                )
+
+                hasher = hashlib.sha256()
+                if existing:
+                    with part.open("rb") as previous:
+                        for chunk in iter(lambda: previous.read(self.CHUNK_SIZE), b""):
+                            hasher.update(chunk)
+                downloaded = existing
+                with part.open("ab" if resumed else "wb") as output:
+                    while True:
+                        stop = self._stop_events.get(task_id)
+                        pause = self._pause_events.get(task_id)
+                        if stop and stop.is_set():
+                            return
+                        if pause and pause.is_set():
+                            self._update(
+                                task_id,
+                                status=DownloadStatus.PAUSED,
+                                downloaded_bytes=downloaded,
+                                total_bytes=total,
+                            )
+                            return
+                        chunk = response.read(self.CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        output.flush()
                         hasher.update(chunk)
-            downloaded = existing
-            with part.open("ab" if resumed else "wb") as output:
-                while True:
+                        downloaded += len(chunk)
+                        self._update(task_id, downloaded_bytes=downloaded, total_bytes=total)
+
+                with self._lock:
                     stop = self._stop_events.get(task_id)
                     pause = self._pause_events.get(task_id)
+                    current = self.get(task_id)
                     if stop and stop.is_set():
                         return
                     if pause and pause.is_set():
                         self._update(task_id, status=DownloadStatus.PAUSED, downloaded_bytes=downloaded, total_bytes=total)
                         return
-                    chunk = response.read(self.CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    output.write(chunk)
-                    output.flush()
-                    hasher.update(chunk)
-                    downloaded += len(chunk)
-                    self._update(task_id, downloaded_bytes=downloaded, total_bytes=total)
+                    if current is None or current.status == DownloadStatus.CANCELLED:
+                        return
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(part, target)
+                    self._complete(task_id, target, downloaded, hasher.hexdigest())
+                return
+            except HTTPError as exc:
+                if existing and exc.code == 416:
+                    if target.exists() and target.stat().st_size == existing:
+                        self._complete(task_id, target, existing)
+                        return
+                    part.unlink(missing_ok=True)
+                    if attempt < self.MAX_RETRIES and self._sleep_before_retry(attempt, task_id):
+                        attempt += 1
+                        continue
+                if not self._is_retryable_http(exc) or attempt >= self.MAX_RETRIES:
+                    raise
+            except (URLError, TimeoutError, OSError) as exc:
+                if attempt >= self.MAX_RETRIES:
+                    raise RuntimeError(f"download request failed after {attempt + 1} attempts: {exc}") from exc
+            finally:
+                if response is not None:
+                    response.close()
 
-        with self._lock:
-            stop = self._stop_events.get(task_id)
-            pause = self._pause_events.get(task_id)
-            current = self.get(task_id)
-            if stop and stop.is_set():
+            if not self._sleep_before_retry(attempt, task_id):
                 return
-            if pause and pause.is_set():
-                self._update(task_id, status=DownloadStatus.PAUSED, downloaded_bytes=downloaded, total_bytes=total)
-                return
-            if current is None or current.status == DownloadStatus.CANCELLED:
-                return
-            target.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(part, target)
-            self._complete(task_id, target, downloaded, hasher.hexdigest())
+            attempt += 1
 
     def _complete(self, task_id: str, target: Path, size: int, digest: str | None = None) -> None:
         if digest is None:
@@ -393,7 +445,15 @@ class DownloadManager:
     @staticmethod
     def _row_to_task(row: sqlite3.Row) -> DownloadTask:
         return DownloadTask(
-            id=str(row["id"]), url=str(row["url"]), destination=str(row["destination"]), filename=str(row["filename"]),
-            status=DownloadStatus(str(row["status"])), downloaded_bytes=int(row["downloaded_bytes"]), total_bytes=int(row["total_bytes"]),
-            error=row["error"], created_at=float(row["created_at"]), updated_at=float(row["updated_at"]), sha256=row["sha256"],
+            id=row["id"],
+            url=row["url"],
+            destination=row["destination"],
+            filename=row["filename"],
+            status=DownloadStatus(row["status"]),
+            downloaded_bytes=row["downloaded_bytes"],
+            total_bytes=row["total_bytes"],
+            error=row["error"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            sha256=row["sha256"],
         )
