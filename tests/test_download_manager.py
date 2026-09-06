@@ -68,8 +68,6 @@ class GateHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(PAYLOAD)))
         self.end_headers()
-        # Keep the fixture paused only after a complete downloader read chunk
-        # so the worker must persist a real partial file before lifecycle calls.
         first_chunk_size = 300 * 1024
         self.wfile.write(PAYLOAD[:first_chunk_size])
         self.wfile.flush()
@@ -145,15 +143,23 @@ def wait_for_status(manager: DownloadManager, task_id: str, status: DownloadStat
 
 
 def wait_for_partial(manager: DownloadManager, task_id: str, timeout: float = 5.0) -> DownloadTask:
+    """Wait for persisted worker progress, not socket/server timing."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         task = manager.get(task_id)
-        if task:
-            partial = Path(task.destination) / f".{task.filename}.part"
-            if partial.exists() and partial.stat().st_size > 0:
-                return task
+        if task and task.downloaded_bytes > 0:
+            return task
         time.sleep(0.01)
-    pytest.fail("download did not write a partial file in time")
+    pytest.fail("download did not persist partial progress in time")
+
+
+def wait_for_no_active(manager: DownloadManager, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if manager.active_count() == 0:
+            return
+        time.sleep(0.01)
+    pytest.fail("download worker did not release its worker slot in time")
 
 
 def test_filename_from_url_is_safe() -> None:
@@ -265,6 +271,7 @@ def test_cancel_queued_task_does_not_consume_worker_slot(gate_server, tmp_path: 
     manager.cancel(first.id)
     GateHandler.release.set()
     assert wait_for(manager, first.id).status is DownloadStatus.CANCELLED
+    wait_for_no_active(manager)
     manager.shutdown()
 
 
@@ -278,6 +285,7 @@ def test_cancel_active_can_delete_partial(gate_server, tmp_path: Path) -> None:
     manager.cancel(task.id, delete_partial=True)
     GateHandler.release.set()
     assert wait_for(manager, task.id).status is DownloadStatus.CANCELLED
+    wait_for_no_active(manager)
     assert not (tmp_path / "files" / ".delete.bin.part").exists()
     assert not (tmp_path / "files" / "delete.bin").exists()
     manager.shutdown()
