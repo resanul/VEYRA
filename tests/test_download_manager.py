@@ -68,7 +68,9 @@ class GateHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(PAYLOAD)))
         self.end_headers()
-        first_chunk_size = 64 * 1024
+        # Keep the fixture paused only after a complete downloader read chunk
+        # so the worker must persist a real partial file before lifecycle calls.
+        first_chunk_size = 300 * 1024
         self.wfile.write(PAYLOAD[:first_chunk_size])
         self.wfile.flush()
         GateHandler.started.set()
