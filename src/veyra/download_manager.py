@@ -48,9 +48,9 @@ class DownloadTask:
 class DownloadManager:
     """Persistent download queue with bounded concurrent workers and lifecycle controls."""
 
-    # Keep reads small enough that pause/cancel can be observed promptly even when
-    # a server delivers data slowly. A very large blocking read can otherwise hide
-    # lifecycle events for several seconds and starve persisted progress updates.
+    # Use small reads so lifecycle events and persisted progress are observed promptly.
+    # HTTPResponse.read(size) may wait for the requested size on slow streams; read1()
+    # returns currently available buffered data instead, which keeps pause/cancel responsive.
     CHUNK_SIZE = 64 * 1024
     DEFAULT_TIMEOUT = 30.0
     DEFAULT_MAX_CONCURRENT = 3
@@ -335,10 +335,12 @@ class DownloadManager:
                     if pause and pause.is_set():
                         self._update(task_id, status=DownloadStatus.PAUSED, downloaded_bytes=downloaded, total_bytes=total)
                         return
-                    chunk = response.read(self.CHUNK_SIZE)
+                    read1 = getattr(response, "read1", None)
+                    chunk = read1(self.CHUNK_SIZE) if read1 is not None else response.read(self.CHUNK_SIZE)
                     if not chunk:
                         break
                     output.write(chunk)
+                    output.flush()
                     hasher.update(chunk)
                     downloaded += len(chunk)
                     self._update(task_id, downloaded_bytes=downloaded, total_bytes=total)
