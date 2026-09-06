@@ -48,7 +48,10 @@ class DownloadTask:
 class DownloadManager:
     """Persistent download queue with bounded concurrent workers and lifecycle controls."""
 
-    CHUNK_SIZE = 256 * 1024
+    # Keep reads small enough that pause/cancel can be observed promptly even when
+    # a server delivers data slowly. A very large blocking read can otherwise hide
+    # lifecycle events for several seconds and starve persisted progress updates.
+    CHUNK_SIZE = 64 * 1024
     DEFAULT_TIMEOUT = 30.0
     DEFAULT_MAX_CONCURRENT = 3
 
