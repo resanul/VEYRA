@@ -60,7 +60,9 @@ def wait_for(manager: DownloadManager, task_id: str, timeout: float = 5.0):
 
 def test_filename_from_url_is_safe() -> None:
     assert DownloadManager.filename_from_url("https://example.test/a%20movie") == "a movie"
-    assert DownloadManager.filename_from_url("https://example.test/a:b.mp4") == "a_b.mp4"
+    # Windows treats a colon after the first path character as a drive designator;
+    # Path.name therefore returns the safe basename that VEYRA will persist.
+    assert DownloadManager.filename_from_url("https://example.test/a:b.mp4") == "b.mp4"
 
 
 def test_download_persists_and_completes(server, tmp_path: Path) -> None:
