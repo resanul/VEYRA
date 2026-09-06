@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -45,21 +46,32 @@ class DownloadTask:
 
 
 class DownloadManager:
-    """Persistent, resumable download queue for VEYRA."""
+    """Persistent download queue with bounded concurrent workers."""
 
     CHUNK_SIZE = 256 * 1024
     DEFAULT_TIMEOUT = 30.0
+    DEFAULT_MAX_CONCURRENT = 3
 
-    def __init__(self, storage: Path | None = None, download_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        storage: Path | None = None,
+        download_dir: Path | None = None,
+        *,
+        max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+    ) -> None:
+        if max_concurrent < 1:
+            raise ValueError("max_concurrent must be at least 1")
         root = Path.home() / "AppData" / "Local" / "VEYRA"
         self.storage = storage or root / "downloads.db"
         self.download_dir = download_dir or root / "Downloads"
         self.storage.parent.mkdir(parents=True, exist_ok=True)
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.max_concurrent = max_concurrent
         self._lock = threading.RLock()
         self._stop_events: dict[str, threading.Event] = {}
         self._pause_events: dict[str, threading.Event] = {}
-        self._threads: dict[str, threading.Thread] = {}
+        self._futures: dict[str, Future[None]] = {}
+        self._executor = ThreadPoolExecutor(max_workers=max_concurrent, thread_name_prefix="veyra-download")
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -101,13 +113,7 @@ class DownloadManager:
         name = Path(unquote(urlparse(url).path)).name
         return cls._safe_filename(name or fallback)
 
-    def add(
-        self,
-        url: str,
-        *,
-        filename: str | None = None,
-        destination: Path | None = None,
-    ) -> DownloadTask:
+    def add(self, url: str, *, filename: str | None = None, destination: Path | None = None) -> DownloadTask:
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("downloads require an HTTP(S) URL")
         name = self._safe_filename(filename or self.filename_from_url(url))
@@ -147,15 +153,33 @@ class DownloadManager:
                 raise KeyError(task_id)
             if task.status == DownloadStatus.COMPLETED:
                 return
-            thread = self._threads.get(task_id)
-            if thread and thread.is_alive():
+            future = self._futures.get(task_id)
+            if future and not future.done():
                 return
             self._stop_events[task_id] = threading.Event()
             self._pause_events[task_id] = threading.Event()
-            self._update(task_id, status=DownloadStatus.DOWNLOADING, error=None)
-            thread = threading.Thread(target=self._worker, args=(task_id,), name=f"veyra-download-{task_id[:8]}", daemon=True)
-            self._threads[task_id] = thread
-            thread.start()
+            self._update(task_id, status=DownloadStatus.QUEUED, error=None)
+            self._futures[task_id] = self._executor.submit(self._worker, task_id)
+            self._pump()
+
+    def start_all(self) -> None:
+        for task in self.list(statuses={DownloadStatus.QUEUED, DownloadStatus.FAILED}):
+            self.start(task.id)
+
+    def _pump(self) -> None:
+        """Promote queued tasks to active workers within the concurrency limit."""
+        active = sum(not future.done() for future in self._futures.values())
+        available = max(0, self.max_concurrent - active)
+        if available == 0:
+            return
+        queued = self.list(statuses={DownloadStatus.QUEUED})
+        for task in queued[:available]:
+            future = self._futures.get(task.id)
+            if future and not future.done():
+                continue
+            self._stop_events.setdefault(task.id, threading.Event())
+            self._pause_events.setdefault(task.id, threading.Event())
+            self._futures[task.id] = self._executor.submit(self._worker, task.id)
 
     def pause(self, task_id: str) -> None:
         with self._lock:
@@ -200,10 +224,11 @@ class DownloadManager:
             db.execute("DELETE FROM downloads WHERE id = ?", (task_id,))
             db.commit()
 
-    def shutdown(self) -> None:
+    def shutdown(self, wait: bool = True) -> None:
         with self._lock:
             for event in self._stop_events.values():
                 event.set()
+            self._executor.shutdown(wait=wait, cancel_futures=True)
 
     def _worker(self, task_id: str) -> None:
         try:
@@ -214,9 +239,10 @@ class DownloadManager:
                 self._update(task_id, status=DownloadStatus.FAILED, error=str(exc))
         finally:
             with self._lock:
-                self._threads.pop(task_id, None)
+                self._futures.pop(task_id, None)
                 self._stop_events.pop(task_id, None)
                 self._pause_events.pop(task_id, None)
+            self._pump()
 
     def _download(self, task_id: str) -> None:
         task = self.get(task_id)
@@ -225,8 +251,7 @@ class DownloadManager:
         target = Path(task.destination) / task.filename
         part = self._part_path(task)
         existing = part.stat().st_size if part.exists() else 0
-        headers = {"User-Agent": "VEYRA/0.3.2", "Accept": "*/*"}
-        request = Request(task.url, headers=headers, method="GET")
+        request = Request(task.url, headers={"User-Agent": "VEYRA/0.3.2", "Accept": "*/*"}, method="GET")
         if existing:
             request.add_header("Range", f"bytes={existing}-")
         try:
@@ -238,8 +263,7 @@ class DownloadManager:
                     return
                 part.unlink(missing_ok=True)
                 existing = 0
-                request = Request(task.url, headers=headers, method="GET")
-                response = urlopen(request, timeout=self.DEFAULT_TIMEOUT)
+                response = urlopen(Request(task.url, headers={"User-Agent": "VEYRA/0.3.2", "Accept": "*/*"}, method="GET"), timeout=self.DEFAULT_TIMEOUT)
             else:
                 raise
         except (URLError, TimeoutError, OSError) as exc:
@@ -259,9 +283,8 @@ class DownloadManager:
                 with part.open("rb") as previous:
                     for chunk in iter(lambda: previous.read(self.CHUNK_SIZE), b""):
                         hasher.update(chunk)
-            mode = "ab" if resumed else "wb"
             downloaded = existing
-            with part.open(mode) as output:
+            with part.open("ab" if resumed else "wb") as output:
                 while True:
                     stop = self._stop_events.get(task_id)
                     pause = self._pause_events.get(task_id)
