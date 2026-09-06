@@ -40,6 +40,7 @@ class SlowHandler(BaseHTTPRequestHandler):
     peak = 0
     lock = threading.Lock()
     hold_next_request = False
+    request_started = threading.Event()
     first_chunk_sent = threading.Event()
     release_held_request = threading.Event()
 
@@ -49,6 +50,7 @@ class SlowHandler(BaseHTTPRequestHandler):
             SlowHandler.peak = max(SlowHandler.peak, SlowHandler.active)
             hold_request = SlowHandler.hold_next_request
             SlowHandler.hold_next_request = False
+            SlowHandler.request_started.set()
         try:
             self.send_response(200)
             self.send_header("Content-Length", str(len(PAYLOAD)))
@@ -86,6 +88,7 @@ def slow_server():
     SlowHandler.active = 0
     SlowHandler.peak = 0
     SlowHandler.hold_next_request = False
+    SlowHandler.request_started = threading.Event()
     SlowHandler.first_chunk_sent = threading.Event()
     SlowHandler.release_held_request = threading.Event()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
@@ -106,7 +109,13 @@ def wait_for(manager: DownloadManager, task_id: str, timeout: float = 5.0):
         if task and task.status in {DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELLED, DownloadStatus.PAUSED}:
             return task
         time.sleep(0.01)
-    pytest.fail("download worker did not finish in time")
+    task = manager.get(task_id)
+    pytest.fail(
+        "download worker did not finish in time: "
+        f"status={task.status.value if task else None}, "
+        f"error={task.error if task else None}, "
+        f"active={manager.active_count()}, queued={manager.queued_count()}"
+    )
 
 
 def wait_for_status(manager: DownloadManager, task_id: str, status: DownloadStatus, timeout: float = 5.0):
@@ -116,7 +125,15 @@ def wait_for_status(manager: DownloadManager, task_id: str, status: DownloadStat
         if task and task.status is status:
             return task
         time.sleep(0.01)
-    pytest.fail(f"download did not reach {status.value}")
+    task = manager.get(task_id)
+    pytest.fail(
+        f"download did not reach {status.value}: "
+        f"observed={task.status.value if task else None}, "
+        f"error={task.error if task else None}, "
+        f"downloaded={task.downloaded_bytes if task else None}, "
+        f"total={task.total_bytes if task else None}, "
+        f"active={manager.active_count()}, queued={manager.queued_count()}"
+    )
 
 
 def wait_for_partial(manager: DownloadManager, task_id: str, timeout: float = 5.0) -> DownloadTask:
@@ -197,6 +214,7 @@ def test_queued_pause_and_resume_preserve_queue_state(slow_server, tmp_path: Pat
     first = manager.add(slow_server, filename="first.bin")
     second = manager.add(slow_server, filename="second.bin")
     manager.start(first.id)
+    assert SlowHandler.request_started.wait(timeout=2)
     wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     assert SlowHandler.first_chunk_sent.wait(timeout=2)
     manager.start(second.id)
@@ -235,6 +253,7 @@ def test_cancel_queued_task_does_not_consume_worker_slot(slow_server, tmp_path: 
     first = manager.add(slow_server, filename="running.bin")
     cancelled = manager.add(slow_server, filename="cancelled.bin")
     manager.start(first.id)
+    assert SlowHandler.request_started.wait(timeout=2)
     wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     assert SlowHandler.first_chunk_sent.wait(timeout=2)
     manager.start(cancelled.id)
