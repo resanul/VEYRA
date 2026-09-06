@@ -11,7 +11,7 @@ import pytest
 from veyra.download_manager import DownloadManager, DownloadStatus
 
 
-PAYLOAD = b"VEYRA-download-fixture-" * 11264
+PAYLOAD = b"VEYRA-download-fixture-" * 20000
 
 
 class RangeHandler(BaseHTTPRequestHandler):
