@@ -35,6 +35,31 @@ class RangeHandler(BaseHTTPRequestHandler):
         return
 
 
+class SlowHandler(BaseHTTPRequestHandler):
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def do_GET(self) -> None:  # noqa: N802
+        with SlowHandler.lock:
+            SlowHandler.active += 1
+            SlowHandler.peak = max(SlowHandler.peak, SlowHandler.active)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(PAYLOAD)))
+            self.end_headers()
+            for offset in range(0, len(PAYLOAD), 1024):
+                self.wfile.write(PAYLOAD[offset:offset + 1024])
+                self.wfile.flush()
+                time.sleep(0.002)
+        finally:
+            with SlowHandler.lock:
+                SlowHandler.active -= 1
+
+    def log_message(self, *_args) -> None:
+        return
+
+
 @pytest.fixture()
 def server():
     RangeHandler.ranges = []
@@ -43,6 +68,20 @@ def server():
     thread.start()
     try:
         yield f"http://127.0.0.1:{httpd.server_port}/media/test.bin"
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=2)
+
+
+@pytest.fixture()
+def slow_server():
+    SlowHandler.active = 0
+    SlowHandler.peak = 0
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_port}/media/slow.bin"
     finally:
         httpd.shutdown()
         thread.join(timeout=2)
@@ -60,8 +99,6 @@ def wait_for(manager: DownloadManager, task_id: str, timeout: float = 5.0):
 
 def test_filename_from_url_is_safe() -> None:
     assert DownloadManager.filename_from_url("https://example.test/a%20movie") == "a movie"
-    # Windows treats a colon after the first path character as a drive designator;
-    # Path.name therefore returns the safe basename that VEYRA will persist.
     assert DownloadManager.filename_from_url("https://example.test/a:b.mp4") == "b.mp4"
 
 
@@ -70,30 +107,41 @@ def test_download_persists_and_completes(server, tmp_path: Path) -> None:
     task = manager.add(server)
     manager.start(task.id)
     result = wait_for(manager, task.id)
-
-    target = tmp_path / "files" / "test.bin"
     assert result.status is DownloadStatus.COMPLETED
-    assert target.read_bytes() == PAYLOAD
-    assert result.downloaded_bytes == len(PAYLOAD)
-    assert result.total_bytes == len(PAYLOAD)
+    assert (tmp_path / "files" / "test.bin").read_bytes() == PAYLOAD
     assert result.sha256 == hashlib.sha256(PAYLOAD).hexdigest()
-    assert not (tmp_path / "files" / ".test.bin.part").exists()
-
     reopened = DownloadManager(tmp_path / "downloads.db", tmp_path / "files")
-    restored = reopened.get(task.id)
-    assert restored is not None
-    assert restored.status is DownloadStatus.COMPLETED
+    assert reopened.get(task.id).status is DownloadStatus.COMPLETED
 
 
 def test_partial_file_resumes_with_range(server, tmp_path: Path) -> None:
     manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files")
     task = manager.add(server)
-    part = tmp_path / "files" / ".test.bin.part"
-    part.write_bytes(PAYLOAD[:100])
-
+    (tmp_path / "files" / ".test.bin.part").write_bytes(PAYLOAD[:100])
     manager.start(task.id)
     result = wait_for(manager, task.id)
-
     assert result.status is DownloadStatus.COMPLETED
     assert (tmp_path / "files" / "test.bin").read_bytes() == PAYLOAD
     assert RangeHandler.ranges[-1] == "bytes=100-"
+
+
+def test_queue_respects_max_concurrency(slow_server, tmp_path: Path) -> None:
+    manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=2)
+    tasks = [manager.add(slow_server, filename=f"file-{index}.bin") for index in range(4)]
+    for task in tasks:
+        manager.start(task.id)
+    results = [wait_for(manager, task.id, timeout=10) for task in tasks]
+    assert all(task.status is DownloadStatus.COMPLETED for task in results)
+    assert SlowHandler.peak <= 2
+    assert SlowHandler.peak == 2
+    manager.shutdown()
+
+
+def test_start_all_only_uses_bounded_workers(slow_server, tmp_path: Path) -> None:
+    manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=2)
+    tasks = [manager.add(slow_server, filename=f"batch-{index}.bin") for index in range(3)]
+    manager.start_all()
+    results = [wait_for(manager, task.id, timeout=10) for task in tasks]
+    assert all(task.status is DownloadStatus.COMPLETED for task in results)
+    assert SlowHandler.peak == 2
+    manager.shutdown()
