@@ -56,8 +56,7 @@ class SlowHandler(BaseHTTPRequestHandler):
             with SlowHandler.lock:
                 SlowHandler.active -= 1
 
-    def log_message(self, *_args) -> None:
-        return
+    def log_message(self, *_args) -> return
 
 
 class GateHandler(BaseHTTPRequestHandler):
@@ -68,7 +67,7 @@ class GateHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(PAYLOAD)))
         self.end_headers()
-        first_chunk_size = 256 * 1024
+        first_chunk_size = 64 * 1024
         self.wfile.write(PAYLOAD[:first_chunk_size])
         self.wfile.flush()
         GateHandler.started.set()
@@ -142,6 +141,18 @@ def wait_for_status(manager: DownloadManager, task_id: str, status: DownloadStat
     pytest.fail(f"download did not reach {status.value}")
 
 
+def wait_for_partial(manager: DownloadManager, task_id: str, timeout: float = 5.0) -> DownloadTask:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        task = manager.get(task_id)
+        if task:
+            partial = Path(task.destination) / f".{task.filename}.part"
+            if partial.exists() and partial.stat().st_size > 0:
+                return task
+        time.sleep(0.01)
+    pytest.fail("download did not write a partial file in time")
+
+
 def test_filename_from_url_is_safe() -> None:
     assert DownloadManager.filename_from_url("https://example.test/a%20movie") == "a movie"
     assert DownloadManager.filename_from_url("https://example.test/a:b.mp4") == "b.mp4"
@@ -200,6 +211,7 @@ def test_queued_pause_and_resume_preserve_queue_state(gate_server, tmp_path: Pat
     second = manager.add(gate_server, filename="second.bin")
     manager.start(first.id)
     assert GateHandler.started.wait(5)
+    wait_for_partial(manager, first.id)
     manager.start(second.id)
     wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     wait_for_status(manager, second.id, DownloadStatus.QUEUED)
@@ -220,6 +232,7 @@ def test_pause_active_then_resume_downloads_from_partial(gate_server, tmp_path: 
     task = manager.add(gate_server, filename="pause.bin")
     manager.start(task.id)
     assert GateHandler.started.wait(5)
+    wait_for_partial(manager, task.id)
     wait_for_status(manager, task.id, DownloadStatus.DOWNLOADING)
     manager.pause(task.id)
     GateHandler.release.set()
@@ -238,7 +251,9 @@ def test_cancel_queued_task_does_not_consume_worker_slot(gate_server, tmp_path: 
     cancelled = manager.add(gate_server, filename="cancelled.bin")
     manager.start(first.id)
     assert GateHandler.started.wait(5)
+    wait_for_partial(manager, first.id)
     manager.start(cancelled.id)
+    wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     wait_for_status(manager, cancelled.id, DownloadStatus.QUEUED)
     manager.cancel(cancelled.id)
     assert manager.get(cancelled.id).status is DownloadStatus.CANCELLED
@@ -255,14 +270,8 @@ def test_cancel_active_can_delete_partial(gate_server, tmp_path: Path) -> None:
     task = manager.add(gate_server, filename="delete.bin")
     manager.start(task.id)
     assert GateHandler.started.wait(5)
+    wait_for_partial(manager, task.id)
     wait_for_status(manager, task.id, DownloadStatus.DOWNLOADING)
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        current = manager.get(task.id)
-        if current and current.downloaded_bytes > 0:
-            break
-        time.sleep(0.01)
-    assert manager.get(task.id).downloaded_bytes > 0
     manager.cancel(task.id, delete_partial=True)
     GateHandler.release.set()
     assert wait_for(manager, task.id).status is DownloadStatus.CANCELLED
