@@ -48,10 +48,9 @@ class DownloadTask:
 class DownloadManager:
     """Persistent download queue with bounded concurrent workers and lifecycle controls."""
 
-    # Use small reads so lifecycle events and persisted progress are observed promptly.
-    # HTTPResponse.read(size) may wait for the requested size on slow streams; read1()
-    # returns currently available buffered data instead, which keeps pause/cancel responsive.
-    CHUNK_SIZE = 64 * 1024
+    # Keep socket reads bounded so pause/cancel checks are revisited frequently even
+    # when the peer sends data slowly. A blocking read avoids read1() buffering quirks.
+    CHUNK_SIZE = 8 * 1024
     DEFAULT_TIMEOUT = 30.0
     DEFAULT_MAX_CONCURRENT = 3
 
@@ -345,15 +344,8 @@ class DownloadManager:
                     if pause and pause.is_set():
                         self._update(task_id, status=DownloadStatus.PAUSED, downloaded_bytes=downloaded, total_bytes=total)
                         return
-                    read1 = getattr(response, "read1", None)
-                    chunk = read1(self.CHUNK_SIZE) if read1 is not None else response.read(self.CHUNK_SIZE)
-                    # read1() is intentionally non-blocking with respect to the
-                    # requested size, but it may return b"" while the peer is still
-                    # producing a known-length response. Do not mistake that for EOF.
+                    chunk = response.read(self.CHUNK_SIZE)
                     if not chunk:
-                        if total > 0 and downloaded < total:
-                            time.sleep(0.01)
-                            continue
                         break
                     output.write(chunk)
                     output.flush()
