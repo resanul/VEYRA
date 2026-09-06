@@ -328,16 +328,20 @@ class DownloadManager:
                     downloaded += len(chunk)
                     self._update(task_id, downloaded_bytes=downloaded, total_bytes=total)
 
-        stop = self._stop_events.get(task_id)
-        pause = self._pause_events.get(task_id)
-        if stop and stop.is_set():
-            return
-        if pause and pause.is_set():
-            self._update(task_id, status=DownloadStatus.PAUSED, downloaded_bytes=downloaded, total_bytes=total)
-            return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(part, target)
-        self._complete(task_id, target, downloaded, hasher.hexdigest())
+        with self._lock:
+            stop = self._stop_events.get(task_id)
+            pause = self._pause_events.get(task_id)
+            current = self.get(task_id)
+            if stop and stop.is_set():
+                return
+            if pause and pause.is_set():
+                self._update(task_id, status=DownloadStatus.PAUSED, downloaded_bytes=downloaded, total_bytes=total)
+                return
+            if current is None or current.status == DownloadStatus.CANCELLED:
+                return
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(part, target)
+            self._complete(task_id, target, downloaded, hasher.hexdigest())
 
     def _complete(self, task_id: str, target: Path, size: int, digest: str | None = None) -> None:
         if digest is None:
