@@ -48,7 +48,7 @@ class DownloadTask:
 class DownloadManager:
     """Persistent download queue with bounded concurrent workers and lifecycle controls."""
 
-    # Keep socket reads bounded so pause/cancel checks are revisited frequently even
+    # Keep socket reads bounded so lifecycle checks are revisited frequently even
     # when the peer sends data slowly. A blocking read avoids read1() buffering quirks.
     CHUNK_SIZE = 8 * 1024
     DEFAULT_TIMEOUT = 30.0
@@ -187,7 +187,10 @@ class DownloadManager:
             available = max(0, self.max_concurrent - len(self._running_tasks))
             if available == 0:
                 return
-            queued = self.list(statuses={DownloadStatus.QUEUED})
+            queued = sorted(
+                self.list(statuses={DownloadStatus.QUEUED}),
+                key=lambda task: (task.created_at, task.id),
+            )
             for task in queued:
                 if available <= 0:
                     break
