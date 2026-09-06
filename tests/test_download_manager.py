@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from veyra.download_manager import DownloadManager, DownloadStatus
+from veyra.download_manager import DownloadManager, DownloadStatus, DownloadTask
 
 
 PAYLOAD = b"VEYRA-download-fixture-" * 20000
@@ -56,7 +56,8 @@ class SlowHandler(BaseHTTPRequestHandler):
             with SlowHandler.lock:
                 SlowHandler.active -= 1
 
-    def log_message(self, *_args) -> return
+    def log_message(self, *_args) -> None:
+        return
 
 
 class GateHandler(BaseHTTPRequestHandler):
