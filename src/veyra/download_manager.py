@@ -70,6 +70,7 @@ class DownloadManager:
         self._lock = threading.RLock()
         self._stop_events: dict[str, threading.Event] = {}
         self._pause_events: dict[str, threading.Event] = {}
+        self._delete_partial_on_cancel: set[str] = set()
         self._futures: dict[str, Future[None]] = {}
         self._executor = ThreadPoolExecutor(max_workers=max_concurrent, thread_name_prefix="veyra-download")
         self._init_db()
@@ -163,6 +164,7 @@ class DownloadManager:
             future = self._futures.get(task_id)
             if future and not future.done():
                 return
+            self._delete_partial_on_cancel.discard(task_id)
             self._stop_events[task_id] = threading.Event()
             self._pause_events[task_id] = threading.Event()
             self._update(task_id, status=DownloadStatus.QUEUED, error=None)
@@ -227,15 +229,19 @@ class DownloadManager:
                 return
             future = self._futures.get(task_id)
             stop = self._stop_events.get(task_id)
-            if future and not future.done():
-                if not future.running():
-                    future.cancel()
+            running = bool(future and not future.done())
+            if running:
                 if stop:
                     stop.set()
+                if delete_partial:
+                    self._delete_partial_on_cancel.add(task_id)
+            else:
+                if future and not future.running():
+                    future.cancel()
+                if delete_partial:
+                    self._part_path(task).unlink(missing_ok=True)
+                    (Path(task.destination) / task.filename).unlink(missing_ok=True)
             self._update(task_id, status=DownloadStatus.CANCELLED)
-            if delete_partial:
-                self._part_path(task).unlink(missing_ok=True)
-                (Path(task.destination) / task.filename).unlink(missing_ok=True)
             self._pump()
 
     def remove(self, task_id: str, *, delete_file: bool = False) -> None:
@@ -266,9 +272,15 @@ class DownloadManager:
                 self._update(task_id, status=DownloadStatus.FAILED, error=str(exc))
         finally:
             with self._lock:
+                task = self.get(task_id)
+                delete_partial = task_id in self._delete_partial_on_cancel
                 self._futures.pop(task_id, None)
                 self._stop_events.pop(task_id, None)
                 self._pause_events.pop(task_id, None)
+                self._delete_partial_on_cancel.discard(task_id)
+                if delete_partial and task is not None and task.status == DownloadStatus.CANCELLED:
+                    self._part_path(task).unlink(missing_ok=True)
+                    (Path(task.destination) / task.filename).unlink(missing_ok=True)
             self._pump()
 
     def _download(self, task_id: str) -> None:
