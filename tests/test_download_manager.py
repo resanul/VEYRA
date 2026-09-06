@@ -51,7 +51,7 @@ class SlowHandler(BaseHTTPRequestHandler):
             for offset in range(0, len(PAYLOAD), 1024):
                 self.wfile.write(PAYLOAD[offset:offset + 1024])
                 self.wfile.flush()
-                time.sleep(0.002)
+                time.sleep(0.01)
         finally:
             with SlowHandler.lock:
                 SlowHandler.active -= 1
@@ -163,6 +163,7 @@ def test_queued_pause_and_resume_preserve_queue_state(slow_server, tmp_path: Pat
     manager.start(first.id)
     manager.start(second.id)
     wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
+    wait_for_status(manager, second.id, DownloadStatus.QUEUED)
     manager.pause(second.id)
     assert manager.get(second.id).status is DownloadStatus.PAUSED
     assert manager.queued_count() == 0
@@ -201,6 +202,7 @@ def test_cancel_queued_task_does_not_consume_worker_slot(slow_server, tmp_path: 
     manager.start(first.id)
     manager.start(cancelled.id)
     wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
+    wait_for_status(manager, cancelled.id, DownloadStatus.QUEUED)
     manager.cancel(cancelled.id)
     assert manager.get(cancelled.id).status is DownloadStatus.CANCELLED
     assert manager.active_count() == 1
@@ -214,6 +216,7 @@ def test_cancel_active_can_delete_partial(slow_server, tmp_path: Path) -> None:
     manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
     task = manager.add(slow_server, filename="delete.bin")
     manager.start(task.id)
+    wait_for_status(manager, task.id, DownloadStatus.DOWNLOADING)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         current = manager.get(task.id)
