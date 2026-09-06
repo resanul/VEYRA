@@ -197,9 +197,9 @@ def test_queued_pause_and_resume_preserve_queue_state(slow_server, tmp_path: Pat
     first = manager.add(slow_server, filename="first.bin")
     second = manager.add(slow_server, filename="second.bin")
     manager.start(first.id)
+    wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     assert SlowHandler.first_chunk_sent.wait(timeout=2)
     manager.start(second.id)
-    wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     wait_for_status(manager, second.id, DownloadStatus.QUEUED)
     manager.pause(second.id)
     assert manager.get(second.id).status is DownloadStatus.PAUSED
@@ -235,9 +235,9 @@ def test_cancel_queued_task_does_not_consume_worker_slot(slow_server, tmp_path: 
     first = manager.add(slow_server, filename="running.bin")
     cancelled = manager.add(slow_server, filename="cancelled.bin")
     manager.start(first.id)
+    wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     assert SlowHandler.first_chunk_sent.wait(timeout=2)
     manager.start(cancelled.id)
-    wait_for_status(manager, first.id, DownloadStatus.DOWNLOADING)
     wait_for_status(manager, cancelled.id, DownloadStatus.QUEUED)
     manager.cancel(cancelled.id)
     assert manager.get(cancelled.id).status is DownloadStatus.CANCELLED
