@@ -46,7 +46,7 @@ class DownloadTask:
 
 
 class DownloadManager:
-    """Persistent download queue with bounded concurrent workers."""
+    """Persistent download queue with bounded concurrent workers and lifecycle controls."""
 
     CHUNK_SIZE = 256 * 1024
     DEFAULT_TIMEOUT = 30.0
@@ -146,6 +146,13 @@ class DownloadManager:
                 rows = db.execute("SELECT * FROM downloads ORDER BY created_at DESC").fetchall()
         return [self._row_to_task(row) for row in rows]
 
+    def active_count(self) -> int:
+        with self._lock:
+            return sum(not future.done() for future in self._futures.values())
+
+    def queued_count(self) -> int:
+        return len(self.list(statuses={DownloadStatus.QUEUED}))
+
     def start(self, task_id: str) -> None:
         with self._lock:
             task = self.get(task_id)
@@ -159,7 +166,6 @@ class DownloadManager:
             self._stop_events[task_id] = threading.Event()
             self._pause_events[task_id] = threading.Event()
             self._update(task_id, status=DownloadStatus.QUEUED, error=None)
-            self._futures[task_id] = self._executor.submit(self._worker, task_id)
             self._pump()
 
     def start_all(self) -> None:
@@ -167,26 +173,34 @@ class DownloadManager:
             self.start(task.id)
 
     def _pump(self) -> None:
-        """Promote queued tasks to active workers within the concurrency limit."""
-        active = sum(not future.done() for future in self._futures.values())
-        available = max(0, self.max_concurrent - active)
-        if available == 0:
-            return
-        queued = self.list(statuses={DownloadStatus.QUEUED})
-        for task in queued[:available]:
-            future = self._futures.get(task.id)
-            if future and not future.done():
-                continue
-            self._stop_events.setdefault(task.id, threading.Event())
-            self._pause_events.setdefault(task.id, threading.Event())
-            self._futures[task.id] = self._executor.submit(self._worker, task.id)
+        """Start FIFO queued work only while an actual worker slot is available."""
+        with self._lock:
+            active = sum(not future.done() for future in self._futures.values())
+            available = max(0, self.max_concurrent - active)
+            if available == 0:
+                return
+            queued = self.list(statuses={DownloadStatus.QUEUED})
+            for task in queued:
+                if available <= 0:
+                    break
+                future = self._futures.get(task.id)
+                if future and not future.done():
+                    continue
+                self._stop_events.setdefault(task.id, threading.Event())
+                self._pause_events.setdefault(task.id, threading.Event())
+                self._update(task.id, status=DownloadStatus.DOWNLOADING, error=None)
+                self._futures[task.id] = self._executor.submit(self._worker, task.id)
+                available -= 1
 
     def pause(self, task_id: str) -> None:
         with self._lock:
-            event = self._pause_events.get(task_id)
             task = self.get(task_id)
             if task is None:
                 raise KeyError(task_id)
+            if task.status == DownloadStatus.QUEUED:
+                self._update(task_id, status=DownloadStatus.PAUSED)
+                return
+            event = self._pause_events.get(task_id)
             if event is not None and task.status == DownloadStatus.DOWNLOADING:
                 event.set()
                 self._update(task_id, status=DownloadStatus.PAUSED)
@@ -196,26 +210,36 @@ class DownloadManager:
             task = self.get(task_id)
             if task is None:
                 raise KeyError(task_id)
-            if task.status in {DownloadStatus.PAUSED, DownloadStatus.FAILED, DownloadStatus.QUEUED}:
-                self.start(task_id)
+            if task.status not in {DownloadStatus.PAUSED, DownloadStatus.FAILED, DownloadStatus.QUEUED}:
+                return
+            event = self._pause_events.get(task_id)
+            if event is not None:
+                event.clear()
+            self._update(task_id, status=DownloadStatus.QUEUED, error=None)
+            self._pump()
 
     def cancel(self, task_id: str, *, delete_partial: bool = False) -> None:
         with self._lock:
             task = self.get(task_id)
             if task is None:
                 raise KeyError(task_id)
-            event = self._stop_events.get(task_id)
-            if event is not None:
-                event.set()
+            future = self._futures.get(task_id)
+            stop = self._stop_events.get(task_id)
+            if future and not future.done():
+                if not future.running():
+                    future.cancel()
+                if stop:
+                    stop.set()
             self._update(task_id, status=DownloadStatus.CANCELLED)
             if delete_partial:
                 self._part_path(task).unlink(missing_ok=True)
+            self._pump()
 
     def remove(self, task_id: str, *, delete_file: bool = False) -> None:
         task = self.get(task_id)
         if task is None:
             return
-        if task.status == DownloadStatus.DOWNLOADING:
+        if task.status in {DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED}:
             self.cancel(task_id, delete_partial=delete_file)
         if delete_file:
             Path(task.destination, task.filename).unlink(missing_ok=True)
