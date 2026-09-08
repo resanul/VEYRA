@@ -66,7 +66,10 @@
           <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <Slider x:Name="ProgressSlider" Minimum="0" Maximum="100" Value="0" ValueChanged="ProgressSlider_ValueChanged" />
+        <Slider x:Name="ProgressSlider" Minimum="0" Maximum="100" Value="0"
+                ValueChanged="ProgressSlider_ValueChanged"
+                PreviewMouseDown="ProgressSlider_MouseDown"
+                PreviewMouseUp="ProgressSlider_MouseUp" />
         <DockPanel Grid.Row="1" Margin="0,8,0,0">
           <Button Content="⏮" Width="44" Click="Previous_Click" />
           <Button x:Name="PlayPauseButton" Content="▶" Width="54" Margin="6,0" Click="PlayPause_Click" />
