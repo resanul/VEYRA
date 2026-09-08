@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..download_manager import DownloadManager
+from .download_bridge import ProviderDownloadBridge, ProviderDownloadRequest
 from .episodes import EpisodeGroup, group_episodes
 from .models import SearchResult, StreamSource
 
@@ -32,6 +34,7 @@ class DetailsView(QWidget):
         self.item: SearchResult | None = None
         self._loaded = None
         self._groups: tuple[EpisodeGroup, ...] = ()
+        self._download_bridge = ProviderDownloadBridge(DownloadManager())
 
         self.back_button = QPushButton("← Back")
         self.back_button.clicked.connect(self.back_requested)
@@ -49,6 +52,8 @@ class DetailsView(QWidget):
         self.play_button.clicked.connect(self.play_loaded)
         self.download_button = QPushButton("Download")
         self.download_button.clicked.connect(self.download_loaded)
+        self.download_episode_button = QPushButton("Download selected episode")
+        self.download_episode_button.clicked.connect(self.download_selected_episode)
         self.seasons = QComboBox()
         self.seasons.currentIndexChanged.connect(self._show_selected_season)
         self.episodes = QListWidget()
@@ -74,6 +79,7 @@ class DetailsView(QWidget):
         body.addLayout(hero)
         body.addWidget(self.seasons)
         body.addWidget(self.episodes, 1)
+        body.addWidget(self.download_episode_button)
         body.addWidget(self.empty)
         self.setLayout(body)
         self.reset()
@@ -86,6 +92,8 @@ class DetailsView(QWidget):
         self.play_button.setVisible(False)
         self.download_button.setEnabled(False)
         self.download_button.setVisible(False)
+        self.download_episode_button.setEnabled(False)
+        self.download_episode_button.setVisible(False)
         self.poster.clear()
         self._loaded = None
         self._groups = ()
@@ -132,6 +140,7 @@ class DetailsView(QWidget):
             self._enable_source_actions()
         if self._groups:
             self.seasons.addItems([f"Season {group.season}" for group in self._groups])
+            self.download_episode_button.setVisible(True)
             self.empty.setText("")
             self._show_selected_season(0)
         elif loaded.load.streams:
@@ -172,6 +181,7 @@ class DetailsView(QWidget):
             row = QListWidgetItem(label)
             row.setData(Qt.ItemDataRole.UserRole, episode)
             self.episodes.addItem(row)
+        self.download_episode_button.setEnabled(self.episodes.count() > 0)
 
     @staticmethod
     def _preferred_stream(streams: list[StreamSource]) -> StreamSource | None:
@@ -194,6 +204,15 @@ class DetailsView(QWidget):
                 streams = []
         return streams
 
+    def _queue_download(self, stream: StreamSource, item: SearchResult | None) -> None:
+        try:
+            task = self._download_bridge.enqueue(ProviderDownloadRequest(source=stream, item=item))
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            self.empty.setText(f"Download error: {exc}")
+            return
+        self.empty.setText(f"Download queued: {task.filename}")
+        self.download_requested.emit((task, item))
+
     def play_loaded(self) -> None:
         if self._loaded is None:
             return
@@ -206,7 +225,7 @@ class DetailsView(QWidget):
             return
         stream = self._preferred_stream(list(getattr(self._loaded, "streams", ())))
         if stream is not None:
-            self.download_requested.emit((stream, self.item))
+            self._queue_download(stream, self.item)
 
     def play_episode(self, row: QListWidgetItem) -> None:
         episode = row.data(Qt.ItemDataRole.UserRole)
@@ -219,10 +238,13 @@ class DetailsView(QWidget):
         row = self.episodes.currentItem()
         episode = row.data(Qt.ItemDataRole.UserRole) if row is not None else None
         if not isinstance(episode, SearchResult):
+            self.empty.setText("Select an episode first.")
             return
         stream = self._preferred_stream(self._resolve_episode_streams(episode))
         if stream is not None:
-            self.download_requested.emit((stream, episode))
+            self._queue_download(stream, episode)
+        else:
+            self.empty.setText("No downloadable stream was returned for this episode.")
 
     def _emit_streams(self, streams: list[StreamSource], item: SearchResult | None = None) -> None:
         if not streams:
