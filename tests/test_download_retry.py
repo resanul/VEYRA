@@ -8,7 +8,8 @@ from veyra import download_manager as download_module
 from veyra.download_manager import DownloadManager, DownloadStatus
 
 
-PAYLOAD = b"VEYRA-retry-fixture-" * 200
+# Keep the fixture larger than first_cut so the failure is genuinely mid-stream.
+PAYLOAD = b"VEYRA-retry-fixture-" * 1000
 
 
 class FakeResponse:
