@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from urllib.error import URLError
 
@@ -42,6 +43,28 @@ class FakeResponse:
         self.close()
 
 
+def wait_for_terminal(manager: DownloadManager, task_id: str, timeout: float = 5.0):
+    """Wait for the asynchronous worker to publish a terminal lifecycle state."""
+    deadline = time.monotonic() + timeout
+    terminal = {
+        DownloadStatus.COMPLETED,
+        DownloadStatus.FAILED,
+        DownloadStatus.CANCELLED,
+        DownloadStatus.PAUSED,
+    }
+    while time.monotonic() < deadline:
+        result = manager.get(task_id)
+        if result and result.status in terminal:
+            return result
+        time.sleep(0.01)
+    result = manager.get(task_id)
+    raise AssertionError(
+        "download did not reach a terminal state: "
+        f"status={result.status.value if result else None}, "
+        f"error={result.error if result else None}"
+    )
+
+
 def test_midstream_network_failure_resumes_from_partial(monkeypatch, tmp_path: Path) -> None:
     calls: list[str | None] = []
     first_cut = 8192
@@ -59,9 +82,8 @@ def test_midstream_network_failure_resumes_from_partial(monkeypatch, tmp_path: P
     manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
     task = manager.add("https://example.test/retry.bin")
     manager.start(task.id)
-    result = manager.get(task.id)
+    result = wait_for_terminal(manager, task.id)
 
-    assert result is not None
     assert result.status is DownloadStatus.COMPLETED
     assert (tmp_path / "files" / "retry.bin").read_bytes() == PAYLOAD
     assert calls == [None, f"bytes={first_cut}-"]
@@ -84,9 +106,8 @@ def test_initial_network_failures_are_retried(monkeypatch, tmp_path: Path) -> No
     manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
     task = manager.add("https://example.test/retry.bin")
     manager.start(task.id)
-    result = manager.get(task.id)
+    result = wait_for_terminal(manager, task.id)
 
-    assert result is not None
     assert result.status is DownloadStatus.COMPLETED
     assert calls == 3
     assert (tmp_path / "files" / "retry.bin").read_bytes() == PAYLOAD
@@ -106,9 +127,8 @@ def test_network_failure_after_retry_budget_marks_task_failed(monkeypatch, tmp_p
     manager = DownloadManager(tmp_path / "downloads.db", tmp_path / "files", max_concurrent=1)
     task = manager.add("https://example.test/retry.bin")
     manager.start(task.id)
-    result = manager.get(task.id)
+    result = wait_for_terminal(manager, task.id)
 
-    assert result is not None
     assert result.status is DownloadStatus.FAILED
     assert "after 4 attempts" in (result.error or "")
     assert calls == manager.MAX_RETRIES + 1
