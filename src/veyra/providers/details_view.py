@@ -3,7 +3,7 @@ from __future__ import annotations
 from urllib.request import urlopen
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +23,7 @@ class DetailsView(QWidget):
     """Details surface for movies and series, including seasons/episodes."""
 
     play_requested = Signal(object)
+    download_requested = Signal(object)
     back_requested = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -47,6 +47,8 @@ class DetailsView(QWidget):
         self.description.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.play_loaded)
+        self.download_button = QPushButton("Download")
+        self.download_button.clicked.connect(self.download_loaded)
         self.seasons = QComboBox()
         self.seasons.currentIndexChanged.connect(self._show_selected_season)
         self.episodes = QListWidget()
@@ -58,7 +60,10 @@ class DetailsView(QWidget):
         info.addWidget(self.title)
         info.addWidget(self.meta)
         info.addWidget(self.description)
-        info.addWidget(self.play_button)
+        actions = QHBoxLayout()
+        actions.addWidget(self.play_button)
+        actions.addWidget(self.download_button)
+        info.addLayout(actions)
         info.addStretch(1)
         hero = QHBoxLayout()
         hero.addWidget(self.poster)
@@ -79,6 +84,8 @@ class DetailsView(QWidget):
         self.empty.clear()
         self.play_button.setEnabled(False)
         self.play_button.setVisible(False)
+        self.download_button.setEnabled(False)
+        self.download_button.setVisible(False)
         self.poster.clear()
         self._loaded = None
         self._groups = ()
@@ -122,8 +129,7 @@ class DetailsView(QWidget):
         self.description.setText(description)
         self._groups = group_episodes(loaded.load.episodes)
         if loaded.load.streams:
-            self.play_button.setVisible(True)
-            self.play_button.setEnabled(True)
+            self._enable_source_actions()
         if self._groups:
             self.seasons.addItems([f"Season {group.season}" for group in self._groups])
             self.empty.setText("")
@@ -134,6 +140,12 @@ class DetailsView(QWidget):
         else:
             self._load_as_movie()
 
+    def _enable_source_actions(self) -> None:
+        self.play_button.setVisible(True)
+        self.play_button.setEnabled(True)
+        self.download_button.setVisible(True)
+        self.download_button.setEnabled(True)
+
     def _load_as_movie(self) -> None:
         if self.provider is None or self.item is None:
             return
@@ -143,8 +155,7 @@ class DetailsView(QWidget):
             streams = []
         if streams:
             self._loaded = type("Loaded", (), {"streams": tuple(streams)})()
-            self.play_button.setVisible(True)
-            self.play_button.setEnabled(True)
+            self._enable_source_actions()
             self.empty.setText("Direct playback")
         else:
             self.empty.setText("No playable stream or episode was returned.")
@@ -153,7 +164,7 @@ class DetailsView(QWidget):
         self.episodes.clear()
         if index < 0 or index >= len(self._groups):
             return
-        for number, episode in enumerate(self._groups[index].episodes, 1):
+        for episode in self._groups[index].episodes:
             label = episode.title
             episode_no = episode.metadata.get("episode") or episode.metadata.get("episodeNumber") or episode.metadata.get("episode_number")
             if episode_no:
@@ -162,18 +173,15 @@ class DetailsView(QWidget):
             row.setData(Qt.ItemDataRole.UserRole, episode)
             self.episodes.addItem(row)
 
-    def play_loaded(self) -> None:
-        if self._loaded is None:
-            return
-        streams = list(getattr(self._loaded, "streams", ()))
-        if streams:
-            self._emit_streams(streams)
+    @staticmethod
+    def _preferred_stream(streams: list[StreamSource]) -> StreamSource | None:
+        if not streams:
+            return None
+        return sorted(streams, key=lambda stream: stream.quality or "", reverse=True)[0]
 
-    def play_episode(self, row: QListWidgetItem) -> None:
-        episode = row.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(episode, SearchResult) or self.provider is None:
-            return
-        streams: list[StreamSource] = []
+    def _resolve_episode_streams(self, episode: SearchResult) -> list[StreamSource]:
+        if self.provider is None:
+            return []
         try:
             streams = list(self.provider.streams(episode))
         except (OSError, RuntimeError, ValueError, TypeError):
@@ -184,7 +192,37 @@ class DetailsView(QWidget):
                 streams = list(response.streams)
             except (OSError, RuntimeError, ValueError, TypeError):
                 streams = []
+        return streams
+
+    def play_loaded(self) -> None:
+        if self._loaded is None:
+            return
+        streams = list(getattr(self._loaded, "streams", ()))
+        if streams:
+            self._emit_streams(streams)
+
+    def download_loaded(self) -> None:
+        if self._loaded is None:
+            return
+        stream = self._preferred_stream(list(getattr(self._loaded, "streams", ())))
+        if stream is not None:
+            self.download_requested.emit((stream, self.item))
+
+    def play_episode(self, row: QListWidgetItem) -> None:
+        episode = row.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(episode, SearchResult):
+            return
+        streams = self._resolve_episode_streams(episode)
         self._emit_streams(streams, episode)
+
+    def download_selected_episode(self) -> None:
+        row = self.episodes.currentItem()
+        episode = row.data(Qt.ItemDataRole.UserRole) if row is not None else None
+        if not isinstance(episode, SearchResult):
+            return
+        stream = self._preferred_stream(self._resolve_episode_streams(episode))
+        if stream is not None:
+            self.download_requested.emit((stream, episode))
 
     def _emit_streams(self, streams: list[StreamSource], item: SearchResult | None = None) -> None:
         if not streams:
@@ -193,7 +231,6 @@ class DetailsView(QWidget):
         if len(streams) == 1:
             self.play_requested.emit(streams[0])
             return
-        # Reuse a simple quality chooser through the parent catalog when more
-        # than one stream is returned; emit the best available source here.
-        preferred = sorted(streams, key=lambda stream: stream.quality or "", reverse=True)[0]
-        self.play_requested.emit(preferred)
+        preferred = self._preferred_stream(streams)
+        if preferred is not None:
+            self.play_requested.emit(preferred)
