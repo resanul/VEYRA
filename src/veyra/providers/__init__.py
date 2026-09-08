@@ -5,6 +5,7 @@ from .network import NetworkClient, NetworkRequestError, NetworkResponse, Reques
 from .registry import ProviderRegistry
 from .catalog import CatalogProvider, CatalogSection
 from .stream_resolver import ManifestInfo, StreamResolver
+from .download_bridge import ProviderDownloadBridge, ProviderDownloadRequest
 
 __all__ = [
     "ProviderRegistry",
@@ -18,4 +19,6 @@ __all__ = [
     "NetworkRequestError",
     "NetworkResponse",
     "RequestOptions",
+    "ProviderDownloadBridge",
+    "ProviderDownloadRequest",
 ]
