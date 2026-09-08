@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Win32;
 
@@ -148,7 +149,7 @@ public partial class MainWindow : Window
     {
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.Invoke(UpdateDownloadSummary);
+            Dispatcher.BeginInvoke(UpdateDownloadSummary);
             return;
         }
         UpdateDownloadSummary();
@@ -173,6 +174,16 @@ public partial class MainWindow : Window
         ProgressSlider.Value = Math.Min(ProgressSlider.Maximum, position.TotalSeconds);
         _updatingProgress = false;
         TimeText.Text = $"{FormatTime(position)} / {FormatTime(duration)}";
+    }
+
+    private void ProgressSlider_MouseDown(object sender, MouseButtonEventArgs e)
+        => _seeking = true;
+
+    private void ProgressSlider_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        _seeking = false;
+        if (NativePreview.Source is not null)
+            NativePreview.Position = TimeSpan.FromSeconds(ProgressSlider.Value);
     }
 
     private void ProgressSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
