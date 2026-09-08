@@ -99,9 +99,11 @@ public sealed class DownloadManagerService : IDisposable
 
     private async Task RunAsync(DownloadItem item, CancellationTokenSource cts)
     {
-        await _slots.WaitAsync(cts.Token).ConfigureAwait(false);
+        var acquired = false;
         try
         {
+            await _slots.WaitAsync(cts.Token).ConfigureAwait(false);
+            acquired = true;
             item.Status = DownloadItemStatus.Downloading;
             var partial = item.FilePath + ".part";
             var existing = File.Exists(partial) ? new FileInfo(partial).Length : 0L;
@@ -171,7 +173,7 @@ public sealed class DownloadManagerService : IDisposable
         {
             item.BytesPerSecond = 0;
             item.RefreshDerivedProperties();
-            _slots.Release();
+            if (acquired) _slots.Release();
         }
     }
 
