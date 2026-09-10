@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -22,7 +23,6 @@ public partial class MainWindow : Window
         DragOver += MainWindow_DragOver;
         Drop += MainWindow_Drop;
         Closed += MainWindow_Closed;
-
         _mediaTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _mediaTimer.Tick += MediaTimer_Tick;
         _mediaTimer.Start();
@@ -35,8 +35,7 @@ public partial class MainWindow : Window
             Title = "Open media",
             Filter = "Media files|*.mp4;*.mkv;*.webm;*.avi;*.mov;*.m4v;*.ts;*.mp3;*.flac;*.aac;*.wav;*.ogg|All files|*.*"
         };
-        if (dialog.ShowDialog(this) == true)
-            OpenMedia(dialog.FileName);
+        if (dialog.ShowDialog(this) == true) OpenMedia(dialog.FileName);
     }
 
     private void MainWindow_DragOver(object sender, DragEventArgs e)
@@ -45,8 +44,7 @@ public partial class MainWindow : Window
     private void MainWindow_Drop(object sender, DragEventArgs e)
     {
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
-        if (e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)
-            OpenMedia(files[0]);
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0) OpenMedia(files[0]);
     }
 
     private void OpenMedia(string path)
@@ -75,11 +73,19 @@ public partial class MainWindow : Window
     private void Previous_Click(object sender, RoutedEventArgs e) { }
     private void Next_Click(object sender, RoutedEventArgs e) { }
 
+    private void BandwidthLimitCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (BandwidthLimitCombo.SelectedItem is not FrameworkElement item) return;
+        if (item.Tag is not string tag) return;
+        if (!double.TryParse(tag, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)) return;
+        _downloadManager.SetBandwidthLimit(value <= 0 ? null : value);
+        UpdateDownloadSummary();
+    }
+
     private async void AddDownload_Click(object sender, RoutedEventArgs e)
     {
         var url = DownloadUrlBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(url)) return;
-
         try
         {
             var item = await _downloadManager.AddAsync(url);
@@ -130,8 +136,7 @@ public partial class MainWindow : Window
 
     private void ClearCompleted_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var item in _downloads.Where(x => x.Status == DownloadItemStatus.Completed).ToList())
-            _downloads.Remove(item);
+        foreach (var item in _downloads.Where(x => x.Status == DownloadItemStatus.Completed).ToList()) _downloads.Remove(item);
         UpdateDownloadSummary();
     }
 
@@ -142,8 +147,7 @@ public partial class MainWindow : Window
         Process.Start(new ProcessStartInfo { FileName = directory, UseShellExecute = true });
     }
 
-    private DownloadItem? GetItem(object sender)
-        => (sender as FrameworkElement)?.Tag as DownloadItem;
+    private DownloadItem? GetItem(object sender) => (sender as FrameworkElement)?.Tag as DownloadItem;
 
     private void DownloadItem_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -159,14 +163,15 @@ public partial class MainWindow : Window
     {
         var active = _downloads.Count(x => x.Status == DownloadItemStatus.Downloading);
         var queued = _downloads.Count(x => x.Status == DownloadItemStatus.Queued);
-        DownloadSummary.Text = $"{active} active · {queued} queued · {_downloads.Count} total";
+        var limit = _downloadManager.BandwidthLimitBytesPerSecond;
+        var limitText = limit.HasValue ? $" · limit {DownloadItem.FormatBytes(limit.Value)}/s" : " · unlimited";
+        DownloadSummary.Text = $"{active} active · {queued} queued · {_downloads.Count} total{limitText}";
     }
 
     private void MediaTimer_Tick(object? sender, EventArgs e)
     {
         if (NativePreview.Source is null || _seeking) return;
         if (!NativePreview.NaturalDuration.HasTimeSpan) return;
-
         var duration = NativePreview.NaturalDuration.TimeSpan;
         var position = NativePreview.Position;
         _updatingProgress = true;
@@ -176,14 +181,12 @@ public partial class MainWindow : Window
         TimeText.Text = $"{FormatTime(position)} / {FormatTime(duration)}";
     }
 
-    private void ProgressSlider_MouseDown(object sender, MouseButtonEventArgs e)
-        => _seeking = true;
+    private void ProgressSlider_MouseDown(object sender, MouseButtonEventArgs e) => _seeking = true;
 
     private void ProgressSlider_MouseUp(object sender, MouseButtonEventArgs e)
     {
         _seeking = false;
-        if (NativePreview.Source is not null)
-            NativePreview.Position = TimeSpan.FromSeconds(ProgressSlider.Value);
+        if (NativePreview.Source is not null) NativePreview.Position = TimeSpan.FromSeconds(ProgressSlider.Value);
     }
 
     private void ProgressSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
