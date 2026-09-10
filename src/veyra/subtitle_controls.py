@@ -8,14 +8,17 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_me
     from PySide6.QtCore import QSettings
     from PySide6.QtGui import QKeySequence, QShortcut
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
 
     from .playback_state import PlaybackState, PlaybackStateStore
+    from .subtitle_download import SubtitleDownloadBridge
     from .subtitles import SubtitleStyle
 
     store = settings or QSettings("VEYRA", "VEYRA")
     state_store = PlaybackStateStore(store)
     player = window.findChild(QMediaPlayer)
     audio_output = window.findChild(QAudioOutput)
+    download_bridge = SubtitleDownloadBridge()
 
     try:
         style = SubtitleStyle(
@@ -125,6 +128,37 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_me
             pass
 
     settings_menu = parent_menu.addMenu("Subtitle settings")
+
+    download_menu = settings_menu.addMenu("Subtitle download")
+    download_active = download_menu.addAction("Download active external subtitle")
+    download_url = download_menu.addAction("Download subtitle from URL…")
+
+    def download_active_subtitle() -> None:
+        source = getattr(subtitle_engine, "source", None)
+        if not source:
+            QMessageBox.information(window, "Subtitle download", "No active external subtitle is loaded.")
+            return
+        try:
+            task = download_bridge.enqueue_url(source, title="subtitle")
+        except Exception as exc:
+            QMessageBox.warning(window, "Subtitle download", f"Unable to queue subtitle download:\n{exc}")
+            return
+        QMessageBox.information(window, "Subtitle download", f"Queued: {task.filename}")
+
+    def download_subtitle_url() -> None:
+        url, accepted = QInputDialog.getText(window, "Download subtitle", "Subtitle URL:")
+        if not accepted or not url.strip():
+            return
+        try:
+            task = download_bridge.enqueue_url(url.strip(), title="subtitle")
+        except Exception as exc:
+            QMessageBox.warning(window, "Subtitle download", f"Unable to queue subtitle download:\n{exc}")
+            return
+        QMessageBox.information(window, "Subtitle download", f"Queued: {task.filename}")
+
+    download_active.triggered.connect(download_active_subtitle)
+    download_url.triggered.connect(download_subtitle_url)
+
     sync_menu = settings_menu.addMenu("Subtitle sync")
     sync_minus_1 = sync_menu.addAction("Delay −1.0 s")
     sync_minus = sync_menu.addAction("Delay −0.1 s")
@@ -201,6 +235,7 @@ def install_subtitle_controls(window, video, overlay, subtitle_engine, parent_me
     QShortcut(QKeySequence("["), window).activated.connect(lambda: adjust_sync(-500))
     QShortcut(QKeySequence("]"), window).activated.connect(lambda: adjust_sync(500))
     window.destroyed.connect(lambda: save_player_state())
+    window.destroyed.connect(download_bridge.close)
     return apply_style
 
 
