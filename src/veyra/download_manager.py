@@ -14,6 +14,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
+from .bandwidth import BandwidthLimiter
+
 
 class DownloadStatus(str, Enum):
     QUEUED = "queued"
@@ -46,7 +48,7 @@ class DownloadTask:
 
 
 class DownloadManager:
-    """Persistent download queue with bounded concurrent workers and lifecycle controls."""
+    """Persistent download queue with bounded workers, lifecycle controls and bandwidth limiting."""
 
     CHUNK_SIZE = 8 * 1024
     DEFAULT_TIMEOUT = 30.0
@@ -61,6 +63,7 @@ class DownloadManager:
         download_dir: Path | None = None,
         *,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+        bandwidth_limit: float | None = None,
     ) -> None:
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be at least 1")
@@ -70,6 +73,7 @@ class DownloadManager:
         self.storage.parent.mkdir(parents=True, exist_ok=True)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.max_concurrent = max_concurrent
+        self._bandwidth = BandwidthLimiter(bandwidth_limit)
         self._lock = threading.RLock()
         self._stop_events: dict[str, threading.Event] = {}
         self._pause_events: dict[str, threading.Event] = {}
@@ -78,6 +82,15 @@ class DownloadManager:
         self._running_tasks: set[str] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_concurrent, thread_name_prefix="veyra-download")
         self._init_db()
+
+    @property
+    def bandwidth_limit(self) -> float | None:
+        """Current aggregate download cap in bytes per second, or None for unlimited."""
+        return self._bandwidth.limit_bytes_per_second
+
+    def set_bandwidth_limit(self, limit_bytes_per_second: float | None) -> None:
+        """Set the aggregate bandwidth cap without restarting active downloads."""
+        self._bandwidth.set_limit(limit_bytes_per_second)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.storage, timeout=30)
@@ -380,6 +393,8 @@ class DownloadManager:
                         chunk = response.read(self.CHUNK_SIZE)
                         if not chunk:
                             break
+                        if not self._bandwidth.wait(len(chunk), stop_event=stop, pause_event=pause):
+                            return
                         output.write(chunk)
                         output.flush()
                         hasher.update(chunk)
