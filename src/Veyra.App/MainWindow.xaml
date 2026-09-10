@@ -22,17 +22,9 @@
       <Setter Property="Padding" Value="10,7" />
     </Style>
   </Window.Resources>
-
   <Grid Margin="18">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="*" />
-    </Grid.RowDefinitions>
-    <Grid.ColumnDefinitions>
-      <ColumnDefinition Width="*" />
-      <ColumnDefinition Width="390" />
-    </Grid.ColumnDefinitions>
-
+    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="390" /></Grid.ColumnDefinitions>
     <DockPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,14">
       <StackPanel Orientation="Horizontal">
         <TextBlock Text="VEYRA" FontSize="28" FontWeight="Bold" VerticalAlignment="Center" />
@@ -40,36 +32,20 @@
       </StackPanel>
       <Button x:Name="OpenButton" Content="Open media" Margin="20,0,0,0" Padding="18,8" Click="OpenButton_Click" DockPanel.Dock="Right" />
     </DockPanel>
-
     <Grid Grid.Row="1" Grid.Column="0" Margin="0,0,14,0">
-      <Grid.RowDefinitions>
-        <RowDefinition Height="*" />
-        <RowDefinition Height="Auto" />
-      </Grid.RowDefinitions>
-
+      <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
       <Border Grid.Row="0" Background="Black" CornerRadius="12" BorderBrush="#242733" BorderThickness="1">
         <Grid>
-          <MediaElement x:Name="NativePreview"
-                        LoadedBehavior="Manual"
-                        UnloadedBehavior="Manual"
-                        Stretch="Uniform"
-                        Visibility="Collapsed" />
+          <MediaElement x:Name="NativePreview" LoadedBehavior="Manual" UnloadedBehavior="Manual" Stretch="Uniform" Visibility="Collapsed" />
           <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
             <TextBlock Text="VEYRA" FontSize="48" FontWeight="Bold" HorizontalAlignment="Center" />
             <TextBlock Text="Drop a video here or choose Open media" Margin="0,8,0,0" Opacity="0.65" HorizontalAlignment="Center" />
           </StackPanel>
         </Grid>
       </Border>
-
       <Grid Grid.Row="1" Margin="0,14,0,0">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto" />
-          <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
-        <Slider x:Name="ProgressSlider" Minimum="0" Maximum="100" Value="0"
-                ValueChanged="ProgressSlider_ValueChanged"
-                PreviewMouseDown="ProgressSlider_MouseDown"
-                PreviewMouseUp="ProgressSlider_MouseUp" />
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <Slider x:Name="ProgressSlider" Minimum="0" Maximum="100" Value="0" ValueChanged="ProgressSlider_ValueChanged" PreviewMouseDown="ProgressSlider_MouseDown" PreviewMouseUp="ProgressSlider_MouseUp" />
         <DockPanel Grid.Row="1" Margin="0,8,0,0">
           <Button Content="⏮" Width="44" Click="Previous_Click" />
           <Button x:Name="PlayPauseButton" Content="▶" Width="54" Margin="6,0" Click="PlayPause_Click" />
@@ -83,55 +59,45 @@
         </DockPanel>
       </Grid>
     </Grid>
-
     <Border Grid.Row="1" Grid.Column="1" Background="{DynamicResource VeyraPanel}" CornerRadius="12" Padding="14" BorderBrush="#242733" BorderThickness="1">
       <Grid>
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto" />
-          <RowDefinition Height="Auto" />
-          <RowDefinition Height="Auto" />
-          <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
         <DockPanel Grid.Row="0" Margin="0,0,0,12">
           <StackPanel>
             <TextBlock Text="Downloads" FontSize="20" FontWeight="SemiBold" />
             <TextBlock x:Name="DownloadSummary" Text="0 active · 0 queued" FontSize="12" Opacity="0.6" Margin="0,2,0,0" />
           </StackPanel>
-          <Button Content="Open folder" Click="OpenDownloadsFolder_Click" DockPanel.Dock="Right" />
+          <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+            <TextBlock Text="Limit" VerticalAlignment="Center" Margin="0,0,5,0" FontSize="11" Opacity="0.7" />
+            <ComboBox x:Name="BandwidthLimitCombo" Width="112" Height="30" SelectionChanged="BandwidthLimitCombo_SelectionChanged" SelectedIndex="0">
+              <ComboBoxItem Content="Unlimited" Tag="0" />
+              <ComboBoxItem Content="256 KB/s" Tag="262144" />
+              <ComboBoxItem Content="512 KB/s" Tag="524288" />
+              <ComboBoxItem Content="1 MB/s" Tag="1048576" />
+              <ComboBoxItem Content="2 MB/s" Tag="2097152" />
+              <ComboBoxItem Content="5 MB/s" Tag="5242880" />
+              <ComboBoxItem Content="10 MB/s" Tag="10485760" />
+            </ComboBox>
+            <Button Content="Open folder" Click="OpenDownloadsFolder_Click" />
+          </StackPanel>
         </DockPanel>
-
         <Grid Grid.Row="1" Margin="0,0,0,10">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="Auto" />
-          </Grid.ColumnDefinitions>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
           <TextBox x:Name="DownloadUrlBox" Grid.Column="0" Height="38" VerticalContentAlignment="Center" ToolTip="Paste an HTTP(S) download URL" />
           <Button Grid.Column="1" Content="＋ Add" Height="38" Margin="6,0,0,0" Padding="14,6" Click="AddDownload_Click" />
         </Grid>
-
         <DockPanel Grid.Row="2" Margin="0,0,0,8">
           <Button Content="Start all" Click="StartAllDownloads_Click" />
           <Button Content="Pause all" Click="PauseAllDownloads_Click" />
           <Button Content="Clear completed" Click="ClearCompleted_Click" DockPanel.Dock="Right" />
         </DockPanel>
-
         <ListBox x:Name="DownloadList" Grid.Row="3" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
           <ListBox.ItemTemplate>
             <DataTemplate>
               <Border Background="#0F1117" BorderBrush="#242733" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,8">
                 <Grid>
-                  <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                  </Grid.RowDefinitions>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                  </Grid.ColumnDefinitions>
-
+                  <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding FilePath}" />
                   <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding StatusText}" FontSize="11" Opacity="0.7" VerticalAlignment="Center" Margin="8,0,0,0" />
                   <ProgressBar Grid.Row="1" Grid.ColumnSpan="2" Height="6" Margin="0,8,0,6" Minimum="0" Maximum="100" Value="{Binding Progress}" />
