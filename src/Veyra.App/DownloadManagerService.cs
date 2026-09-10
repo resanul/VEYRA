@@ -8,36 +8,31 @@ public sealed class DownloadManagerService : IDisposable
 {
     private const int MaxConcurrent = 3;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
-
-    private readonly HttpClient _httpClient = new(new HttpClientHandler
-    {
-        AutomaticDecompression = DecompressionMethods.None,
-        AllowAutoRedirect = true
-    })
-    {
-        Timeout = RequestTimeout
-    };
+    private readonly HttpClient _httpClient = new(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None, AllowAutoRedirect = true }) { Timeout = RequestTimeout };
     private readonly SemaphoreSlim _slots = new(MaxConcurrent, MaxConcurrent);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _cancellations = new();
     private readonly ConcurrentDictionary<string, Task> _workers = new();
+    private readonly BandwidthLimiter _bandwidth = new();
     private bool _disposed;
 
-    public DownloadManagerService()
+    public DownloadManagerService(double? bandwidthLimitBytesPerSecond = null)
     {
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("VEYRA/0.3.2");
+        _bandwidth.SetLimit(bandwidthLimitBytesPerSecond);
     }
+
+    public double? BandwidthLimitBytesPerSecond => _bandwidth.LimitBytesPerSecond;
+
+    public void SetBandwidthLimit(double? bytesPerSecond) => _bandwidth.SetLimit(bytesPerSecond);
 
     public async Task<DownloadItem> AddAsync(string url, string? fileName = null, string? directory = null)
     {
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             throw new ArgumentException("Downloads require an HTTP(S) URL.", nameof(url));
-
         var name = SanitizeFileName(fileName ?? Path.GetFileName(Uri.UnescapeDataString(uri.AbsolutePath)));
         if (string.IsNullOrWhiteSpace(name)) name = "download";
         var targetDirectory = directory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "VEYRA");
         Directory.CreateDirectory(targetDirectory);
-
         var item = new DownloadItem(uri.ToString(), Path.Combine(targetDirectory, name));
         Start(item);
         await Task.CompletedTask;
@@ -48,7 +43,6 @@ public sealed class DownloadManagerService : IDisposable
     {
         if (_disposed) throw new ObjectDisposedException(nameof(DownloadManagerService));
         if (item.Status == DownloadItemStatus.Completed) return;
-
         item.Status = DownloadItemStatus.Queued;
         item.Error = null;
         var cts = new CancellationTokenSource();
@@ -91,10 +85,8 @@ public sealed class DownloadManagerService : IDisposable
 
     public async Task RemoveAsync(DownloadItem item, bool deleteFile = false)
     {
-        if (item.Status is DownloadItemStatus.Downloading or DownloadItemStatus.Queued)
-            await CancelAsync(item, deleteFile);
-        else if (deleteFile)
-            DeletePartial(item);
+        if (item.Status is DownloadItemStatus.Downloading or DownloadItemStatus.Queued) await CancelAsync(item, deleteFile);
+        else if (deleteFile) DeletePartial(item);
     }
 
     private async Task RunAsync(DownloadItem item, CancellationTokenSource cts)
@@ -107,11 +99,8 @@ public sealed class DownloadManagerService : IDisposable
             item.Status = DownloadItemStatus.Downloading;
             var partial = item.FilePath + ".part";
             var existing = File.Exists(partial) ? new FileInfo(partial).Length : 0L;
-
             using var request = new HttpRequestMessage(HttpMethod.Get, item.Url);
-            if (existing > 0)
-                request.Headers.Range = new RangeHeaderValue(existing, null);
-
+            if (existing > 0) request.Headers.Range = new RangeHeaderValue(existing, null);
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
             if (existing > 0 && response.StatusCode != HttpStatusCode.PartialContent)
             {
@@ -119,20 +108,11 @@ public sealed class DownloadManagerService : IDisposable
                 File.Delete(partial);
             }
             response.EnsureSuccessStatusCode();
-
             var contentLength = response.Content.Headers.ContentLength;
-            item.TotalBytes = contentLength.HasValue ? existing + contentLength.Value : 0;
+            item.TotalBytes = contentLength.HasValue ? existing + contentLength.Value : 0L;
             item.DownloadedBytes = existing;
-
             await using var input = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
-            await using var output = new FileStream(
-                partial,
-                existing > 0 ? FileMode.Append : FileMode.Create,
-                FileAccess.Write,
-                FileShare.Read,
-                64 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-
+            await using var output = new FileStream(partial, existing > 0 ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
             var buffer = new byte[64 * 1024];
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             var lastBytes = existing;
@@ -141,6 +121,7 @@ public sealed class DownloadManagerService : IDisposable
             {
                 var read = await input.ReadAsync(buffer.AsMemory(0, buffer.Length), cts.Token).ConfigureAwait(false);
                 if (read == 0) break;
+                await _bandwidth.WaitAsync(read, cts.Token).ConfigureAwait(false);
                 await output.WriteAsync(buffer.AsMemory(0, read), cts.Token).ConfigureAwait(false);
                 item.DownloadedBytes += read;
                 var elapsed = stopwatch.Elapsed - lastSample;
@@ -152,7 +133,6 @@ public sealed class DownloadManagerService : IDisposable
                     item.RefreshDerivedProperties();
                 }
             }
-
             output.Close();
             File.Move(partial, item.FilePath, true);
             item.BytesPerSecond = 0;
@@ -161,8 +141,7 @@ public sealed class DownloadManagerService : IDisposable
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            if (item.Status != DownloadItemStatus.Paused && item.Status != DownloadItemStatus.Cancelled)
-                item.Status = DownloadItemStatus.Cancelled;
+            if (item.Status != DownloadItemStatus.Paused && item.Status != DownloadItemStatus.Cancelled) item.Status = DownloadItemStatus.Cancelled;
         }
         catch (Exception ex)
         {
@@ -186,8 +165,7 @@ public sealed class DownloadManagerService : IDisposable
     {
         if (_workers.TryGetValue(id, out var worker))
         {
-            try { await worker.ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
+            try { await worker.ConfigureAwait(false); } catch (OperationCanceledException) { }
         }
     }
 
