@@ -102,6 +102,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Python
+        uses: actions/checkout@v4
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -118,6 +121,28 @@ jobs:
 
       - name: Adaptive playback E2E
         run: python -m pytest -q -m e2e tests/test_adaptive_playback_e2e.py
+
+  download:
+    name: Download E2E
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+
+      - name: Download E2E
+        run: python -m pytest -q -m e2e tests/test_download_e2e.py
 
   package:
     name: Windows package
@@ -167,7 +192,7 @@ jobs:
   gate:
     name: RELEASE GATE
     runs-on: windows-latest
-    needs: [unit, player, network, adaptive, package]
+    needs: [unit, player, network, adaptive, download, package]
     if: ${{ always() }}
     steps:
       - name: Verify all release checks passed
@@ -178,6 +203,7 @@ jobs:
             player = '${{ needs.player.result }}'
             network = '${{ needs.network.result }}'
             adaptive = '${{ needs.adaptive.result }}'
+            download = '${{ needs.download.result }}'
             package = '${{ needs.package.result }}'
           }
           $results.GetEnumerator() | Sort-Object Name | ForEach-Object {
