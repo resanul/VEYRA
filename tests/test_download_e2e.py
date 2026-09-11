@@ -75,6 +75,7 @@ def wait_for_completion(manager: DownloadManager, task_id: str, timeout: float =
     )
 
 
+@pytest.mark.e2e
 def test_download_e2e_completes_persists_and_verifies(download_server, tmp_path: Path) -> None:
     database = tmp_path / "downloads.db"
     destination = tmp_path / "downloads"
